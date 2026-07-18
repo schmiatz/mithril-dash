@@ -47,7 +47,7 @@ func readNodeState(accountsPath string) (NodeState, bool) {
 
 // RunStatePoller polls mithril_state.json on interval and invokes onState
 // whenever the file is readable, so the dashboard has slot/epoch/bankhash
-// even before the WebSocket-less RPC/Prometheus layers have anything.
+// even before the Prometheus scrape layer has anything.
 func RunStatePoller(ctx context.Context, accountsPath string, interval time.Duration, onState func(NodeState)) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

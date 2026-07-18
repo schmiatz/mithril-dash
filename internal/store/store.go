@@ -1,9 +1,9 @@
 // Package store is mithril-dash's central in-memory aggregator: every
 // collector (log tailer, replay_timings.jsonl tailer, Prometheus scraper,
-// state-file poller, RPC poller) feeds events in here through one of the
-// Apply* methods; the web layer only ever reads Snapshot() and the History
-// ring buffers. One mutex + condition variable, mirroring the pattern of a
-// single-process Python/Flask dashboard translated into idiomatic Go.
+// state-file poller) feeds events in here through one of the Apply* methods;
+// the web layer only ever reads Snapshot() and the History ring buffers. One
+// mutex + condition variable, mirroring the pattern of a single-process
+// Python/Flask dashboard translated into idiomatic Go.
 package store
 
 import (
@@ -44,22 +44,23 @@ type Overview struct {
 	LastShutdownReason string `json:"last_shutdown_reason"`
 	LastShutdownAt     string `json:"last_shutdown_at"`
 
-	CurrentSlot        uint64 `json:"current_slot"`
-	CurrentEpoch       uint64 `json:"current_epoch"`
-	SlotIndex          uint64 `json:"slot_index"`
-	SlotsInEpoch       uint64 `json:"slots_in_epoch"`
-	BankHashState      string `json:"bank_hash_state"`
-	BankHashRPC        string `json:"bank_hash_rpc"`
-	BlockHeightRPC     uint64 `json:"block_height_rpc"`
-	LatestBlockhashRPC string `json:"latest_blockhash_rpc"`
-	RPCReachable       bool   `json:"rpc_reachable"`
+	CurrentSlot   uint64 `json:"current_slot"`
+	CurrentEpoch  uint64 `json:"current_epoch"`
+	SlotIndex     uint64 `json:"slot_index"`
+	SlotsInEpoch  uint64 `json:"slots_in_epoch"`
+	BankHashState string `json:"bank_hash_state"`
 
 	SourceLog        string `json:"source_log"`
 	SourceReplayJSON string `json:"source_replay_jsonl"`
 	SourcePrometheus string `json:"source_prometheus"`
-	SourceRPC        string `json:"source_rpc"`
 	SourceStateFile  string `json:"source_state_file"`
 }
+
+// slotsPerEpoch mirrors the constant mithril's own RPC handler hardcodes
+// (pkg/rpcserver/get_epoch_info.go) rather than reading the real epoch
+// schedule sysvar — used to derive an epoch-progress estimate locally so the
+// dashboard doesn't need to poll mithril's RPC server for it.
+const slotsPerEpoch = 432000
 
 type PipelineState struct {
 	LatestSlot        uint64                `json:"latest_slot"`
@@ -144,7 +145,6 @@ type Store struct {
 	logHealth    sourceHealth
 	replayHealth sourceHealth
 	promHealth   sourceHealth
-	rpcHealth    sourceHealth
 	stateHealth  sourceHealth
 
 	replayHist    []ReplayHistPoint
@@ -201,9 +201,15 @@ func (s *Store) WaitForChange(since uint64, timeout time.Duration) uint64 {
 func (s *Store) Snapshot() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ov := s.overview
+	// Epoch progress is derived here rather than polled from mithril's RPC:
+	// an approximation (see slotsPerEpoch), but no worse than what mithril's
+	// own RPC handler returns today, at zero cost to mithril's RPC server.
+	ov.SlotsInEpoch = slotsPerEpoch
+	ov.SlotIndex = ov.CurrentSlot % slotsPerEpoch
 	return State{
 		GeneratedAt: time.Now(),
-		Overview:    s.overview,
+		Overview:    ov,
 		Pipeline:    s.pipeline,
 		BlockProd:   s.blockProd,
 		Voting:      s.voting,
@@ -375,29 +381,6 @@ func (s *Store) ApplyNodeState(ns collect.NodeState) {
 	}
 	s.overview.CurrentSlot = maxU64(s.overview.CurrentSlot, ns.LastSlot)
 	s.overview.CurrentEpoch = maxU64(s.overview.CurrentEpoch, ns.LastEpoch)
-
-	s.touch()
-}
-
-// ApplyRPCSnapshot ingests one mithril JSON-RPC poll.
-func (s *Store) ApplyRPCSnapshot(snap collect.RPCSnapshot) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.rpcHealth.LastAt = snap.TS
-	s.overview.RPCReachable = snap.Ok
-	if snap.Ok {
-		s.overview.SourceRPC = s.rpcHealth.Status()
-		s.overview.CurrentSlot = maxU64(s.overview.CurrentSlot, snap.EpochInfo.AbsoluteSlot)
-		s.overview.CurrentEpoch = maxU64(s.overview.CurrentEpoch, snap.EpochInfo.Epoch)
-		s.overview.SlotIndex = snap.EpochInfo.SlotIndex
-		s.overview.SlotsInEpoch = snap.EpochInfo.SlotsInEpoch
-		s.overview.BlockHeightRPC = snap.BlockHeight
-		s.overview.LatestBlockhashRPC = snap.Blockhash
-		s.overview.BankHashRPC = snap.BankHash
-	} else {
-		s.overview.SourceRPC = "unreachable"
-	}
 
 	s.touch()
 }

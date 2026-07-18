@@ -2,8 +2,11 @@
 // Overclock-Validator/mithril node. It runs alongside mithril on the same
 // machine and observes it purely from the outside: tailing mithril.log and
 // replay_timings.jsonl, scraping mithril's Prometheus exporter, and polling
-// mithril_state.json and mithril's JSON-RPC. It never touches mithril's
-// process, config, or storage.
+// mithril_state.json. It never touches mithril's process, config, storage,
+// or RPC server — RPC was deliberately left out, since everything it could
+// offer was either redundant with these sources or not worth the extra load
+// its getBankHash call would put on the accounts DB mithril's replay hot
+// path also uses.
 package main
 
 import (
@@ -43,12 +46,11 @@ func main() {
 	go collect.RunReplayTimingsTailer(ctx, cfg.LogDir, 500*time.Millisecond, st.ApplyReplaySample)
 	go collect.RunPromScraper(ctx, cfg.PrometheusURL, cfg.ScrapeInterval, st.ApplyPromSnapshot)
 	go collect.RunStatePoller(ctx, cfg.AccountsPath, cfg.StatePollInterval, st.ApplyNodeState)
-	go collect.RunRPCPoller(ctx, cfg.RPCURL, cfg.RPCPollInterval, st.ApplyRPCSnapshot)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: web.NewServer(st).Handler()}
 	go func() {
-		log.Printf("mithril-dash listening on %s (log-dir=%s accounts-path=%s prometheus=%s rpc=%s)",
-			cfg.HTTPAddr, cfg.LogDir, cfg.AccountsPath, cfg.PrometheusURL, cfg.RPCURL)
+		log.Printf("mithril-dash listening on %s (log-dir=%s accounts-path=%s prometheus=%s)",
+			cfg.HTTPAddr, cfg.LogDir, cfg.AccountsPath, cfg.PrometheusURL)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http server: %v", err)
 		}

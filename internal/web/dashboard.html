@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Mithril Dashboard</title>
+<title>Mithril Alpenglow</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -22,6 +22,7 @@
     background: rgba(255,255,255,.06);
     border: 1px solid rgba(255,255,255,.09);
     box-shadow: 0 20px 60px rgba(0,0,0,.35);
+    overflow: hidden;
   }
 
   .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
@@ -46,6 +47,7 @@
   }
 
   .grid { display: grid; gap: 14px; }
+  .grid > * { min-width: 0; }
   .grid-4 { grid-template-columns: repeat(4, 1fr); }
   .grid-3 { grid-template-columns: repeat(3, 1fr); }
   .grid-2 { grid-template-columns: repeat(2, 1fr); }
@@ -70,17 +72,18 @@
   table.stages th:first-child, table.stages td:first-child { text-align: left; color: #94a3b8; }
   table.stages th { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: #3d5070; font-weight: 800; }
 
-  .feed { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+  .feed { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; overflow-x: hidden; min-width: 0; }
   .feed-item {
     display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 10px;
     background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.05); font-size: 12.5px;
+    min-width: 0;
   }
   .feed-badge { padding: 2px 9px; border-radius: 6px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; flex-shrink: 0; }
   .feed-badge.ok { background: rgba(52,211,153,.15); color: #6ee7b7; }
   .feed-badge.warn { background: rgba(251,191,36,.15); color: #fde68a; }
   .feed-badge.err { background: rgba(248,113,113,.15); color: #fca5a5; }
-  .feed-slot { color: #cbd5e1; font-variant-numeric: tabular-nums; }
-  .feed-detail { color: #64748b; margin-left: auto; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .feed-slot { color: #cbd5e1; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .feed-detail { color: #64748b; margin-left: auto; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
   .empty { color: #3d5070; font-size: 12px; padding: 10px 0; }
 
   .chart-btns { display: flex; gap: 8px; margin-bottom: 10px; }
@@ -90,9 +93,6 @@
   }
   .chart-btn.active { background: rgba(129,140,248,.18); color: #c4b5fd; border-color: rgba(129,140,248,.35); }
   canvas.chart { width: 100%; height: 180px; display: block; }
-
-  .roadmap { font-size: 12.5px; color: #64748b; line-height: 1.6; }
-  .roadmap b { color: #94a3b8; }
 </style>
 </head>
 <body>
@@ -100,15 +100,20 @@
 
   <div class="card header">
     <div>
-      <h1>Mithril Dashboard</h1>
+      <h1>Mithril Alpenglow</h1>
       <div class="sub" id="subtitle">connecting…</div>
     </div>
     <div class="badges" id="badges"></div>
   </div>
 
+  <div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; padding:14px 24px;">
+    <div class="sec-title" style="margin-bottom:0">Chart window</div>
+    <div class="chart-btns" id="global-chart-btns"></div>
+  </div>
+
   <div class="card">
     <div class="sec-title">Node overview</div>
-    <div class="grid grid-4">
+    <div class="grid grid-3">
       <div class="stat">
         <div class="label">Current slot</div>
         <div class="value" id="ov-slot">–</div>
@@ -121,13 +126,8 @@
         <div class="foot" id="ov-epoch-sub">–</div>
       </div>
       <div class="stat">
-        <div class="label">Bank hash (state / rpc)</div>
+        <div class="label">Bank hash</div>
         <div class="value small" id="ov-bankhash">–</div>
-      </div>
-      <div class="stat">
-        <div class="label">RPC block height</div>
-        <div class="value" id="ov-blockheight">–</div>
-        <div class="foot" id="ov-blockhash">blockhash: –</div>
       </div>
     </div>
   </div>
@@ -143,7 +143,6 @@
         <div class="foot" style="margin-top:10px" id="account-cache">accounts cache: –</div>
       </div>
       <div>
-        <div class="chart-btns" id="replay-chart-btns"></div>
         <canvas class="chart" id="replay-chart"></canvas>
         <div class="foot" id="replay-total">total replay time (latest slot): –</div>
       </div>
@@ -175,7 +174,6 @@
     </div>
     <div class="grid grid-2" style="margin-top:16px; align-items:start; gap:20px;">
       <div>
-        <div class="chart-btns" id="slot-chart-btns"></div>
         <canvas class="chart" id="slot-chart"></canvas>
       </div>
       <div>
@@ -230,18 +228,6 @@
     </div>
   </div>
 
-  <div class="card roadmap">
-    <div class="sec-title">Roadmap</div>
-    This dashboard is a fully external observer: it tails <b>mithril.log</b> and
-    <b>replay_timings.jsonl</b>, scrapes mithril's Prometheus exporter, and polls
-    <b>mithril_state.json</b> and mithril's own JSON-RPC — no changes to mithril
-    itself. Certificate/fork-choice/dual-watermark detail (exact notarization
-    vs. finalization state, per-slot vote tallies) lives only in
-    <code>consensus.Engine.Snapshot()</code> in-process today; exposing that as
-    a small JSON debug endpoint in mithril would let a future version replace
-    log-line parsing with exact state.
-  </div>
-
 </div>
 
 <script>
@@ -284,7 +270,6 @@ function update(d) {
     sourceBadge('log', ov.source_log),
     sourceBadge('replay', ov.source_replay_jsonl),
     sourceBadge('prom', ov.source_prometheus),
-    sourceBadge('rpc', ov.rpc_reachable ? ov.source_rpc : 'unreachable'),
     sourceBadge('state', ov.source_state_file),
   ].join('');
 
@@ -294,11 +279,9 @@ function update(d) {
   if (ov.slots_in_epoch) {
     const pct = Math.min(100, (ov.slot_index / ov.slots_in_epoch) * 100);
     $('ov-epoch-bar').style.width = pct.toFixed(2) + '%';
-    $('ov-epoch-sub').textContent = `${fmtNum(ov.slot_index)} / ${fmtNum(ov.slots_in_epoch)} slots (${pct.toFixed(1)}%)`;
+    $('ov-epoch-sub').textContent = `${fmtNum(ov.slot_index)} / ${fmtNum(ov.slots_in_epoch)} slots (${pct.toFixed(1)}%, est.)`;
   }
-  $('ov-bankhash').textContent = `${shortHash(ov.bank_hash_state)} / ${shortHash(ov.bank_hash_rpc)}`;
-  $('ov-blockheight').textContent = fmtNum(ov.block_height_rpc);
-  $('ov-blockhash').textContent = 'blockhash: ' + shortHash(ov.latest_blockhash_rpc);
+  $('ov-bankhash').textContent = shortHash(ov.bank_hash_state);
 
   // Pipeline stages table
   const rows = STAGE_ORDER.map(key => {
@@ -417,31 +400,43 @@ function drawLineChart(canvas, series, opts) {
   ctx.fillText(maxY.toFixed(1) + (opts.unit||''), 4, 12);
 }
 
-let replayWindow = 300, slotWindow = 300;
-function replayBtn(secs, label) {
-  return `<button class="chart-btn ${replayWindow===secs?'active':''}" data-w="${secs}">${label}</button>`;
+// ---- Global chart time window (applies to every chart) ----
+const WINDOW_OPTIONS = [
+  {key: 'live', label: 'Live'},
+  {key: 60, label: '1m'},
+  {key: 300, label: '5m'},
+  {key: 900, label: '15m'},
+  {key: 1800, label: '30m'},
+  {key: 3600, label: '1h'},
+];
+let chartWindow = 'live';
+
+function renderGlobalChartBtns() {
+  $('global-chart-btns').innerHTML = WINDOW_OPTIONS.map(o =>
+    `<button class="chart-btn ${chartWindow === o.key ? 'active' : ''}" data-w="${o.key}">${o.label}</button>`
+  ).join('');
+  $('global-chart-btns').querySelectorAll('button').forEach(b => b.onclick = () => {
+    chartWindow = b.dataset.w === 'live' ? 'live' : Number(b.dataset.w);
+    renderGlobalChartBtns();
+    loadAllCharts();
+  });
 }
-function renderReplayBtns() {
-  $('replay-chart-btns').innerHTML = [ [60,'1m'], [300,'5m'], [1800,'30m'] ]
-    .map(([s,l]) => replayBtn(s,l)).join('');
-  $('replay-chart-btns').querySelectorAll('button').forEach(b => b.onclick = () => { replayWindow = Number(b.dataset.w); renderReplayBtns(); loadReplayChart(); });
+renderGlobalChartBtns();
+
+// 'live' means no time cutoff — just show the most recent samples returned
+// by the server (still capped by `limit`), so the chart keeps scrolling as
+// new data streams in instead of being pinned to a fixed window.
+function filterByWindow(rows, tsKey) {
+  if (chartWindow === 'live') return rows;
+  const cutoff = Date.now() - chartWindow * 1000;
+  return rows.filter(r => new Date(r[tsKey]).getTime() >= cutoff);
 }
-function slotBtn(secs, label) {
-  return `<button class="chart-btn ${slotWindow===secs?'active':''}" data-w="${secs}">${label}</button>`;
-}
-function renderSlotBtns() {
-  $('slot-chart-btns').innerHTML = [ [60,'1m'], [300,'5m'], [1800,'30m'] ]
-    .map(([s,l]) => slotBtn(s,l)).join('');
-  $('slot-chart-btns').querySelectorAll('button').forEach(b => b.onclick = () => { slotWindow = Number(b.dataset.w); renderSlotBtns(); loadSlotChart(); });
-}
-renderReplayBtns(); renderSlotBtns();
 
 async function loadReplayChart() {
   try {
     const res = await fetch('/history?kind=replay&limit=1500');
     const rows = await res.json();
-    const cutoff = Date.now() - replayWindow*1000;
-    const series = (rows||[]).filter(r => new Date(r.ts).getTime() >= cutoff).map(r => ({y: r.total_ms}));
+    const series = filterByWindow(rows || [], 'ts').map(r => ({y: r.total_ms}));
     drawLineChart($('replay-chart'), series, {color:'#818cf8', unit:'ms'});
   } catch (e) {}
 }
@@ -449,8 +444,7 @@ async function loadSlotChart() {
   try {
     const res = await fetch('/history?kind=slot_stats&limit=1500');
     const rows = await res.json();
-    const cutoff = Date.now() - slotWindow*1000;
-    const series = (rows||[]).filter(r => !r.skipped && new Date(r.ts).getTime() >= cutoff).map(r => ({y: r.exec_ms}));
+    const series = filterByWindow((rows || []).filter(r => !r.skipped), 'ts').map(r => ({y: r.exec_ms}));
     drawLineChart($('slot-chart'), series, {color:'#34d399', unit:'ms'});
   } catch (e) {}
 }
@@ -458,19 +452,19 @@ async function loadVoteChart() {
   try {
     const res = await fetch('/history?kind=voting&limit=1500');
     const rows = await res.json();
+    const windowed = filterByWindow(rows || [], 'ts');
     const series = [];
-    for (let i = 1; i < (rows||[]).length; i++) {
-      series.push({y: Math.max(0, rows[i].network_landed - rows[i-1].network_landed)});
+    for (let i = 1; i < windowed.length; i++) {
+      series.push({y: Math.max(0, windowed[i].network_landed - windowed[i-1].network_landed)});
     }
     drawLineChart($('vote-chart'), series, {color:'#fbbf24', unit:''});
   } catch (e) {}
 }
 
-loadReplayChart(); loadSlotChart(); loadVoteChart();
-setInterval(loadReplayChart, 4000);
-setInterval(loadSlotChart, 4000);
-setInterval(loadVoteChart, 5000);
-window.addEventListener('resize', () => { loadReplayChart(); loadSlotChart(); loadVoteChart(); });
+function loadAllCharts() { loadReplayChart(); loadSlotChart(); loadVoteChart(); }
+loadAllCharts();
+setInterval(loadAllCharts, 4000);
+window.addEventListener('resize', loadAllCharts);
 </script>
 </body>
 </html>

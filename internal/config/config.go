@@ -1,12 +1,11 @@
 // Package config holds mithril-dash's runtime configuration: where to find
-// the mithril node's logs, state file, Prometheus endpoint and JSON-RPC —
-// all read-only, external observation points. Nothing here changes mithril.
+// the mithril node's logs, state file, and Prometheus endpoint — all
+// read-only, external observation points. Nothing here changes mithril.
 package config
 
 import (
 	"flag"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -26,22 +25,18 @@ type Config struct {
 	// :9090 in mithril itself as of this writing).
 	PrometheusURL string
 
-	// RPCURL is mithril's own JSON-RPC server (`[rpc] port`, default 8899).
-	RPCURL string
-
 	// HTTPAddr is the address mithril-dash's own dashboard listens on.
 	HTTPAddr string
 
 	// ConsensusMode and Cluster are informational, read from mithril's config
-	// (`-mithril-config`) when given — mithril exposes neither over RPC or
-	// the state file, so without a config pointer these just show "unknown"
-	// in the dashboard header.
+	// (`-mithril-config`) when given — mithril exposes neither over the
+	// state file or Prometheus, so without a config pointer these just show
+	// "unknown" in the dashboard header.
 	ConsensusMode string
 	Cluster       string
 
 	ScrapeInterval    time.Duration
 	StatePollInterval time.Duration
-	RPCPollInterval   time.Duration
 }
 
 func envOr(key, fallback string) string {
@@ -57,9 +52,6 @@ type mithrilTOML struct {
 		Logs     string `toml:"logs"`
 		Accounts string `toml:"accounts"`
 	} `toml:"storage"`
-	RPC struct {
-		Port int `toml:"port"`
-	} `toml:"rpc"`
 	Consensus struct {
 		Mode string `toml:"mode"`
 	} `toml:"consensus"`
@@ -109,26 +101,19 @@ func Load() Config {
 	if accountsDefault == "" {
 		accountsDefault = "/mnt/mithril-accounts"
 	}
-	rpcDefault := "http://127.0.0.1:8899"
-	if mc.RPC.Port != 0 {
-		rpcDefault = "http://127.0.0.1:" + strconv.Itoa(mc.RPC.Port)
-	}
 
 	var c Config
-	flag.String("mithril-config", "", "path to mithril's own config.toml; seeds --log-dir/--accounts-path/--rpc-url/cluster/consensus-mode defaults")
+	flag.String("mithril-config", "", "path to mithril's own config.toml; seeds --log-dir/--accounts-path/cluster/consensus-mode defaults")
 	flag.StringVar(&c.LogDir, "log-dir", envOr("MITHRIL_DASH_LOG_DIR", logDefault),
 		"mithril storage.logs directory (contains the `latest` run symlink)")
 	flag.StringVar(&c.AccountsPath, "accounts-path", envOr("MITHRIL_DASH_ACCOUNTS_PATH", accountsDefault),
 		"mithril storage.accounts directory (contains mithril_state.json)")
 	flag.StringVar(&c.PrometheusURL, "prometheus-url", envOr("MITHRIL_DASH_PROMETHEUS_URL", "http://127.0.0.1:9090/metrics"),
 		"mithril's Prometheus /metrics endpoint")
-	flag.StringVar(&c.RPCURL, "rpc-url", envOr("MITHRIL_DASH_RPC_URL", rpcDefault),
-		"mithril's JSON-RPC endpoint")
 	flag.StringVar(&c.HTTPAddr, "http-addr", envOr("MITHRIL_DASH_HTTP_ADDR", ":8090"),
 		"address for mithril-dash's own dashboard web server")
 	flag.DurationVar(&c.ScrapeInterval, "scrape-interval", 3*time.Second, "Prometheus scrape interval")
 	flag.DurationVar(&c.StatePollInterval, "state-poll-interval", 2*time.Second, "mithril_state.json poll interval")
-	flag.DurationVar(&c.RPCPollInterval, "rpc-poll-interval", 5*time.Second, "mithril JSON-RPC poll interval")
 	flag.Parse()
 
 	c.ConsensusMode = mc.Consensus.Mode

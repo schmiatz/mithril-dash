@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mithril Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    font-family: Inter, system-ui, -apple-system, sans-serif;
+    background: radial-gradient(circle at top, #18223a, #070a11);
+    color: #e2e8f0;
+    padding: 28px 16px 56px;
+    display: flex;
+    justify-content: center;
+  }
+  .wrap { width: min(1180px, 100%); display: flex; flex-direction: column; gap: 22px; }
+
+  .card {
+    padding: 22px 24px;
+    border-radius: 20px;
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.09);
+    box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  }
+
+  .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 24px; font-weight: 800; letter-spacing: -.4px; }
+  .sub { color: #7e90ad; font-size: 12.5px; margin-top: 5px; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 20px; font-size: 11px; font-weight: 700;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+    white-space: nowrap;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #64748b; }
+  .dot.live { background: #34d399; }
+  .dot.stale { background: #fbbf24; }
+  .dot.waiting { background: #64748b; }
+  .dot.unreachable { background: #f87171; }
+
+  .sec-title {
+    font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+    color: #3d5070; margin-bottom: 12px;
+  }
+
+  .grid { display: grid; gap: 14px; }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 900px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } .grid-3 { grid-template-columns: repeat(2,1fr);} }
+  @media (max-width: 560px) { .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; } }
+
+  .stat {
+    padding: 16px 18px; border-radius: 16px;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.06);
+  }
+  .stat .label { font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #3d5070; margin-bottom: 8px; }
+  .stat .value { font-size: 24px; font-weight: 800; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+  .stat .value.small { font-size: 15px; word-break: break-all; }
+  .stat .unit { font-size: 11px; color: #3d5070; font-weight: 500; margin-left: 3px; }
+  .stat .foot { font-size: 11px; color: #64748b; margin-top: 6px; }
+
+  .bar-track { height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); margin-top: 8px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg,#818cf8,#c084fc); transition: width .5s ease; }
+
+  table.stages { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.stages th, table.stages td { padding: 8px 10px; text-align: right; border-bottom: 1px solid rgba(255,255,255,.05); font-variant-numeric: tabular-nums; }
+  table.stages th:first-child, table.stages td:first-child { text-align: left; color: #94a3b8; }
+  table.stages th { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: #3d5070; font-weight: 800; }
+
+  .feed { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+  .feed-item {
+    display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 10px;
+    background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.05); font-size: 12.5px;
+  }
+  .feed-badge { padding: 2px 9px; border-radius: 6px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; flex-shrink: 0; }
+  .feed-badge.ok { background: rgba(52,211,153,.15); color: #6ee7b7; }
+  .feed-badge.warn { background: rgba(251,191,36,.15); color: #fde68a; }
+  .feed-badge.err { background: rgba(248,113,113,.15); color: #fca5a5; }
+  .feed-slot { color: #cbd5e1; font-variant-numeric: tabular-nums; }
+  .feed-detail { color: #64748b; margin-left: auto; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .empty { color: #3d5070; font-size: 12px; padding: 10px 0; }
+
+  .chart-btns { display: flex; gap: 8px; margin-bottom: 10px; }
+  .chart-btn {
+    font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 14px; cursor: pointer;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09); color: #94a3b8;
+  }
+  .chart-btn.active { background: rgba(129,140,248,.18); color: #c4b5fd; border-color: rgba(129,140,248,.35); }
+  canvas.chart { width: 100%; height: 180px; display: block; }
+
+  .roadmap { font-size: 12.5px; color: #64748b; line-height: 1.6; }
+  .roadmap b { color: #94a3b8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card header">
+    <div>
+      <h1>Mithril Dashboard</h1>
+      <div class="sub" id="subtitle">connecting…</div>
+    </div>
+    <div class="badges" id="badges"></div>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">Node overview</div>
+    <div class="grid grid-4">
+      <div class="stat">
+        <div class="label">Current slot</div>
+        <div class="value" id="ov-slot">–</div>
+        <div class="foot" id="ov-stage">stage: –</div>
+      </div>
+      <div class="stat">
+        <div class="label">Epoch</div>
+        <div class="value" id="ov-epoch">–</div>
+        <div class="bar-track"><div class="bar-fill" id="ov-epoch-bar" style="width:0%"></div></div>
+        <div class="foot" id="ov-epoch-sub">–</div>
+      </div>
+      <div class="stat">
+        <div class="label">Bank hash (state / rpc)</div>
+        <div class="value small" id="ov-bankhash">–</div>
+      </div>
+      <div class="stat">
+        <div class="label">RPC block height</div>
+        <div class="value" id="ov-blockheight">–</div>
+        <div class="foot" id="ov-blockhash">blockhash: –</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">Replay pipeline — how fast is each stage</div>
+    <div class="grid grid-2" style="align-items:start; gap:20px;">
+      <div>
+        <table class="stages">
+          <thead><tr><th>stage</th><th>latest</th><th>5m avg</th><th>30m avg</th><th>1h avg</th></tr></thead>
+          <tbody id="stage-rows"></tbody>
+        </table>
+        <div class="foot" style="margin-top:10px" id="account-cache">accounts cache: –</div>
+      </div>
+      <div>
+        <div class="chart-btns" id="replay-chart-btns"></div>
+        <canvas class="chart" id="replay-chart"></canvas>
+        <div class="foot" id="replay-total">total replay time (latest slot): –</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">Block production — how the blocks look</div>
+    <div class="grid grid-4">
+      <div class="stat">
+        <div class="label">Latest slot</div>
+        <div class="value" id="bp-slot">–</div>
+        <div class="foot" id="bp-status">–</div>
+      </div>
+      <div class="stat">
+        <div class="label">Exec time</div>
+        <div class="value" id="bp-exec">–</div>
+        <div class="foot" id="bp-eff">eff: –</div>
+      </div>
+      <div class="stat">
+        <div class="label">Shreds</div>
+        <div class="value small" id="bp-shreds">–</div>
+      </div>
+      <div class="stat">
+        <div class="label">Txs / block (avg)</div>
+        <div class="value" id="bp-txsavg">–</div>
+        <div class="foot" id="bp-replays">slot replays: –</div>
+      </div>
+    </div>
+    <div class="grid grid-2" style="margin-top:16px; align-items:start; gap:20px;">
+      <div>
+        <div class="chart-btns" id="slot-chart-btns"></div>
+        <canvas class="chart" id="slot-chart"></canvas>
+      </div>
+      <div>
+        <div class="sec-title" style="margin-bottom:8px">leader slot outcomes (cumulative)</div>
+        <div class="feed" id="outcomes"></div>
+      </div>
+    </div>
+    <div class="grid grid-2" style="margin-top:16px; gap:20px;">
+      <div>
+        <div class="sec-title" style="margin-bottom:8px">recent leader slot events</div>
+        <div class="feed" id="leader-events"><div class="empty">waiting…</div></div>
+      </div>
+      <div>
+        <div class="sec-title" style="margin-bottom:8px">recent per-slot stats</div>
+        <div class="feed" id="slot-events"><div class="empty">waiting…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="sec-title">Voting — how is voting going</div>
+    <div class="grid grid-4">
+      <div class="stat">
+        <div class="label">Votes cast (this run)</div>
+        <div class="value" id="v-cast">–</div>
+      </div>
+      <div class="stat">
+        <div class="label">Network landed</div>
+        <div class="value" id="v-landed">–</div>
+        <div class="foot" id="v-rate">landed rate: –</div>
+      </div>
+      <div class="stat">
+        <div class="label">Broadcast queue</div>
+        <div class="value" id="v-queue">–</div>
+        <div class="foot" id="v-dropped">dropped: –</div>
+      </div>
+      <div class="stat">
+        <div class="label">Peer sends / errors</div>
+        <div class="value small" id="v-peers">–</div>
+        <div class="foot" id="v-conns">active connections: –</div>
+      </div>
+    </div>
+    <div class="grid grid-2" style="margin-top:16px; align-items:start; gap:20px;">
+      <div>
+        <canvas class="chart" id="vote-chart"></canvas>
+        <div class="foot">votes landed per sample interval</div>
+      </div>
+      <div>
+        <div class="sec-title" style="margin-bottom:8px">recent vote events</div>
+        <div class="feed" id="vote-events"><div class="empty">waiting…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card roadmap">
+    <div class="sec-title">Roadmap</div>
+    This dashboard is a fully external observer: it tails <b>mithril.log</b> and
+    <b>replay_timings.jsonl</b>, scrapes mithril's Prometheus exporter, and polls
+    <b>mithril_state.json</b> and mithril's own JSON-RPC — no changes to mithril
+    itself. Certificate/fork-choice/dual-watermark detail (exact notarization
+    vs. finalization state, per-slot vote tallies) lives only in
+    <code>consensus.Engine.Snapshot()</code> in-process today; exposing that as
+    a small JSON debug endpoint in mithril would let a future version replace
+    log-line parsing with exact state.
+  </div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+function fmtNum(n) { return n === undefined || n === null ? '–' : Number(n).toLocaleString(); }
+function fmtMs(n) { return (n === undefined || n === null) ? '–' : Number(n).toFixed(1) + 'ms'; }
+function fmtAgo(ts) {
+  if (!ts) return '–';
+  const s = Math.max(0, Math.round((Date.now() - new Date(ts).getTime())/1000));
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  return Math.floor(s/3600) + 'h ago';
+}
+function shortHash(s) {
+  if (!s) return '–';
+  return s.length > 14 ? s.slice(0,6) + '…' + s.slice(-6) : s;
+}
+
+const STAGE_LABELS = {
+  preprocess_block: 'preprocess', load_block_accounts: 'load accounts', tx_loop: 'tx loop',
+  reward: 'reward', rent: 'rent', run_incinerator: 'incinerator',
+  block_update_accounts: 'update accounts', accounts_delta_hash: 'delta hash',
+  bank_hash: 'bank hash', sigverify: 'sigverify',
+};
+const STAGE_ORDER = Object.keys(STAGE_LABELS);
+
+function sourceBadge(name, status) {
+  status = status || 'waiting';
+  return `<div class="badge"><span class="dot ${status}"></span>${name}: ${status}</div>`;
+}
+
+function update(d) {
+  const ov = d.overview || {}, pl = d.pipeline || {}, bp = d.block_production || {}, vt = d.voting || {};
+
+  $('subtitle').textContent =
+    `${ov.cluster || 'unknown cluster'} · mode: ${ov.consensus_mode || 'unknown'} · run ${ov.run_id ? ov.run_id.slice(0,8) : '–'}`
+    + (ov.writer_commit ? ` · ${ov.writer_commit.slice(0,7)}` : '');
+
+  $('badges').innerHTML = [
+    sourceBadge('log', ov.source_log),
+    sourceBadge('replay', ov.source_replay_jsonl),
+    sourceBadge('prom', ov.source_prometheus),
+    sourceBadge('rpc', ov.rpc_reachable ? ov.source_rpc : 'unreachable'),
+    sourceBadge('state', ov.source_state_file),
+  ].join('');
+
+  $('ov-slot').textContent = fmtNum(ov.current_slot);
+  $('ov-stage').textContent = 'stage: ' + (ov.stage || '–');
+  $('ov-epoch').textContent = fmtNum(ov.current_epoch);
+  if (ov.slots_in_epoch) {
+    const pct = Math.min(100, (ov.slot_index / ov.slots_in_epoch) * 100);
+    $('ov-epoch-bar').style.width = pct.toFixed(2) + '%';
+    $('ov-epoch-sub').textContent = `${fmtNum(ov.slot_index)} / ${fmtNum(ov.slots_in_epoch)} slots (${pct.toFixed(1)}%)`;
+  }
+  $('ov-bankhash').textContent = `${shortHash(ov.bank_hash_state)} / ${shortHash(ov.bank_hash_rpc)}`;
+  $('ov-blockheight').textContent = fmtNum(ov.block_height_rpc);
+  $('ov-blockhash').textContent = 'blockhash: ' + shortHash(ov.latest_blockhash_rpc);
+
+  // Pipeline stages table
+  const rows = STAGE_ORDER.map(key => {
+    const latest = (pl.latest_stages || []).find(s => s.Name === key);
+    return `<tr><td>${STAGE_LABELS[key]}</td><td>${fmtMs(latest ? latest.Ms : null)}</td>
+      <td>${fmtMs((pl.avg_5m_ms||{})[key])}</td><td>${fmtMs((pl.avg_30m_ms||{})[key])}</td><td>${fmtMs((pl.avg_1h_ms||{})[key])}</td></tr>`;
+  }).join('');
+  $('stage-rows').innerHTML = rows;
+  $('replay-total').textContent = `total replay time (slot ${fmtNum(pl.latest_slot)}): ${fmtMs(pl.latest_total_ms)}`;
+  if (pl.account_requested_keys) {
+    const hitPct = ((pl.account_cache_hits + pl.account_index_hits) / pl.account_requested_keys * 100).toFixed(1);
+    $('account-cache').textContent = `accounts cache: ${hitPct}% hit (${fmtNum(pl.account_requested_keys)} keys requested, ${fmtNum(pl.account_index_misses)} misses)`;
+  }
+
+  // Block production
+  const ls = bp.latest_slot_stats;
+  if (ls) {
+    $('bp-slot').textContent = fmtNum(ls.Slot);
+    $('bp-status').textContent = ls.Skipped ? 'skipped' : `${fmtNum(ls.Txns)} txns · ${ls.CULabel || '–'} CU`;
+    $('bp-exec').textContent = ls.Skipped ? '–' : fmtMs(ls.ExecMs);
+    $('bp-eff').textContent = 'eff: ' + (ls.HasEff ? ls.EffMsPerMcu.toFixed(2) + 'ms/Mcu' : '–');
+    $('bp-shreds').textContent = ls.HasShreds
+      ? `ready ${ls.ReadySecs >= 0 ? '+' : ''}${ls.ReadySecs.toFixed(2)}s, asm ${ls.AsmSecs.toFixed(2)}s, repair ${ls.Repaired||ls.PartialShreds||0}`
+      : '–';
+  }
+  $('bp-txsavg').textContent = bp.txs_per_block_avg ? bp.txs_per_block_avg.toFixed(1) : '–';
+  $('bp-replays').textContent = 'slot replays: ' + fmtNum(bp.slot_replays_total);
+
+  const outcomes = bp.outcomes || {};
+  const outcomeRows = [];
+  for (const outcome of Object.keys(outcomes)) {
+    for (const reason of Object.keys(outcomes[outcome])) {
+      outcomeRows.push({outcome, reason, count: outcomes[outcome][reason]});
+    }
+  }
+  outcomeRows.sort((a,b) => b.count - a.count);
+  $('outcomes').innerHTML = outcomeRows.length ? outcomeRows.map(r => {
+    const cls = r.outcome === 'broadcast' ? 'ok' : 'err';
+    return `<div class="feed-item"><span class="feed-badge ${cls}">${r.outcome}</span><span>${r.reason}</span><span class="feed-detail">${fmtNum(r.count)}</span></div>`;
+  }).join('') : '<div class="empty">waiting for Prometheus scrape…</div>';
+
+  $('leader-events').innerHTML = (bp.recent_leader_events && bp.recent_leader_events.length)
+    ? bp.recent_leader_events.slice().reverse().map(e => {
+        const cls = e.Broadcast ? 'ok' : 'err';
+        return `<div class="feed-item"><span class="feed-badge ${cls}">${e.Broadcast ? 'broadcast' : 'missed'}</span>
+          <span class="feed-slot">slot ${fmtNum(e.Slot)}</span><span class="feed-detail">${e.Reason}${e.Detail ? ' — ' + e.Detail : ''}</span></div>`;
+      }).join('')
+    : '<div class="empty">waiting…</div>';
+
+  $('slot-events').innerHTML = (bp.recent_slot_stats && bp.recent_slot_stats.length)
+    ? bp.recent_slot_stats.slice().reverse().map(e => {
+        const cls = e.Skipped ? 'warn' : 'ok';
+        const detail = e.Skipped ? 'skipped' : `${fmtNum(e.Txns)} txns, ${fmtMs(e.ExecMs)}`;
+        return `<div class="feed-item"><span class="feed-badge ${cls}">${e.Skipped ? 'skip' : 'ok'}</span>
+          <span class="feed-slot">slot ${fmtNum(e.Slot)}</span><span class="feed-detail">${detail}</span></div>`;
+      }).join('')
+    : '<div class="empty">waiting…</div>';
+
+  // Voting
+  $('v-cast').textContent = fmtNum(vt.latest ? vt.latest.VotesCastThisRun : null);
+  $('v-landed').textContent = fmtNum(vt.latest ? vt.latest.NetworkLanded : null);
+  $('v-rate').textContent = 'landed rate: ' + (vt.landed_rate_pct !== undefined && vt.landed_rate_pct !== null ? vt.landed_rate_pct.toFixed(1) + '%' : '–');
+  $('v-queue').textContent = fmtNum(vt.latest ? vt.latest.BroadcastQueued : null);
+  $('v-dropped').textContent = 'dropped: ' + fmtNum(vt.latest ? vt.latest.BroadcastDropped : null);
+  $('v-peers').textContent = vt.latest ? `${fmtNum(vt.latest.PeerSends)} / ${fmtNum(vt.latest.PeerSendErrors)}` : '–';
+  $('v-conns').textContent = 'active connections: ' + fmtNum(vt.latest ? vt.latest.ActiveConnections : null);
+
+  const voteEvents = [
+    ...(vt.recent_cast_events || []).map(e => ({kind:'cast', ts:e.TS, slot:e.Slot, detail:`${e.VoteType} rank ${e.Rank}`})),
+    ...(vt.recent_landed_events || []).map(e => ({kind:'landed', ts:e.TS, slot:e.Slot, detail:`${e.VoteType} → ${e.Certificate}`})),
+  ].sort((a,b) => new Date(b.ts) - new Date(a.ts)).slice(0, 40);
+  $('vote-events').innerHTML = voteEvents.length ? voteEvents.map(e =>
+    `<div class="feed-item"><span class="feed-badge ${e.kind === 'landed' ? 'ok' : 'warn'}">${e.kind}</span>
+      <span class="feed-slot">slot ${fmtNum(e.slot)}</span><span class="feed-detail">${e.detail}</span></div>`
+  ).join('') : '<div class="empty">waiting…</div>';
+}
+
+// ---- SSE ----
+const es = new EventSource('/events');
+es.onmessage = (ev) => { try { update(JSON.parse(ev.data)); } catch (e) { console.error(e); } };
+es.onerror = () => { $('subtitle').textContent = 'reconnecting…'; };
+
+// ---- Generic canvas line chart ----
+function drawLineChart(canvas, series, opts) {
+  opts = opts || {};
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(200, rect.width), h = canvas.clientHeight || 180;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  if (!series.length) {
+    ctx.fillStyle = '#3d5070'; ctx.font = '12px sans-serif';
+    ctx.fillText('waiting for data…', 10, h/2);
+    return;
+  }
+  const pad = 8;
+  const ys = series.map(p => p.y);
+  let maxY = Math.max(...ys, 0.001), minY = Math.min(...ys, 0);
+  if (minY > 0) minY = 0;
+  const xN = series.length;
+  const xAt = i => pad + (i/(Math.max(1,xN-1))) * (w - pad*2);
+  const yAt = v => h - pad - ((v - minY)/(maxY - minY || 1)) * (h - pad*2);
+
+  ctx.strokeStyle = opts.color || '#818cf8';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  series.forEach((p,i) => { const x = xAt(i), y = yAt(p.y); i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); });
+  ctx.stroke();
+
+  ctx.fillStyle = (opts.color || '#818cf8') + '22';
+  ctx.lineTo(xAt(xN-1), h-pad); ctx.lineTo(xAt(0), h-pad); ctx.closePath(); ctx.fill();
+
+  ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif';
+  ctx.fillText(maxY.toFixed(1) + (opts.unit||''), 4, 12);
+}
+
+let replayWindow = 300, slotWindow = 300;
+function replayBtn(secs, label) {
+  return `<button class="chart-btn ${replayWindow===secs?'active':''}" data-w="${secs}">${label}</button>`;
+}
+function renderReplayBtns() {
+  $('replay-chart-btns').innerHTML = [ [60,'1m'], [300,'5m'], [1800,'30m'] ]
+    .map(([s,l]) => replayBtn(s,l)).join('');
+  $('replay-chart-btns').querySelectorAll('button').forEach(b => b.onclick = () => { replayWindow = Number(b.dataset.w); renderReplayBtns(); loadReplayChart(); });
+}
+function slotBtn(secs, label) {
+  return `<button class="chart-btn ${slotWindow===secs?'active':''}" data-w="${secs}">${label}</button>`;
+}
+function renderSlotBtns() {
+  $('slot-chart-btns').innerHTML = [ [60,'1m'], [300,'5m'], [1800,'30m'] ]
+    .map(([s,l]) => slotBtn(s,l)).join('');
+  $('slot-chart-btns').querySelectorAll('button').forEach(b => b.onclick = () => { slotWindow = Number(b.dataset.w); renderSlotBtns(); loadSlotChart(); });
+}
+renderReplayBtns(); renderSlotBtns();
+
+async function loadReplayChart() {
+  try {
+    const res = await fetch('/history?kind=replay&limit=1500');
+    const rows = await res.json();
+    const cutoff = Date.now() - replayWindow*1000;
+    const series = (rows||[]).filter(r => new Date(r.ts).getTime() >= cutoff).map(r => ({y: r.total_ms}));
+    drawLineChart($('replay-chart'), series, {color:'#818cf8', unit:'ms'});
+  } catch (e) {}
+}
+async function loadSlotChart() {
+  try {
+    const res = await fetch('/history?kind=slot_stats&limit=1500');
+    const rows = await res.json();
+    const cutoff = Date.now() - slotWindow*1000;
+    const series = (rows||[]).filter(r => !r.skipped && new Date(r.ts).getTime() >= cutoff).map(r => ({y: r.exec_ms}));
+    drawLineChart($('slot-chart'), series, {color:'#34d399', unit:'ms'});
+  } catch (e) {}
+}
+async function loadVoteChart() {
+  try {
+    const res = await fetch('/history?kind=voting&limit=1500');
+    const rows = await res.json();
+    const series = [];
+    for (let i = 1; i < (rows||[]).length; i++) {
+      series.push({y: Math.max(0, rows[i].network_landed - rows[i-1].network_landed)});
+    }
+    drawLineChart($('vote-chart'), series, {color:'#fbbf24', unit:''});
+  } catch (e) {}
+}
+
+loadReplayChart(); loadSlotChart(); loadVoteChart();
+setInterval(loadReplayChart, 4000);
+setInterval(loadSlotChart, 4000);
+setInterval(loadVoteChart, 5000);
+window.addEventListener('resize', () => { loadReplayChart(); loadSlotChart(); loadVoteChart(); });
+</script>
+</body>
+</html>

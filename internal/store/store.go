@@ -57,11 +57,20 @@ type Overview struct {
 	SourceStateFile  string `json:"source_state_file"`
 }
 
-// slotsPerEpoch mirrors the constant mithril's own RPC handler hardcodes
-// (pkg/rpcserver/get_epoch_info.go) rather than reading the real epoch
-// schedule sysvar — used to derive an epoch-progress estimate locally so the
-// dashboard doesn't need to poll mithril's RPC server for it.
-const slotsPerEpoch = 432000
+// estimatedSlotsPerEpoch derives the cluster's actual epoch length from
+// data we already have (current_slot / current_epoch) instead of assuming
+// mainnet's 432,000 — mithril's own RPC hardcodes that constant too
+// (pkg/rpcserver/get_epoch_info.go), but plenty of clusters (this one
+// included) run far shorter epochs, which made a hardcoded 432,000 turn the
+// epoch progress bar into a multi-day cycle that barely moved. Averaging
+// since genesis converges on the true epoch length once any early
+// variable-length warmup epochs are a small fraction of total slots.
+func estimatedSlotsPerEpoch(currentSlot, currentEpoch uint64) uint64 {
+	if currentEpoch == 0 {
+		return 0
+	}
+	return currentSlot / currentEpoch
+}
 
 type PipelineState struct {
 	LatestSlot        uint64                `json:"latest_slot"`
@@ -235,11 +244,12 @@ func (s *Store) Snapshot() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ov := s.overview
-	// Epoch progress is derived here rather than polled from mithril's RPC:
-	// an approximation (see slotsPerEpoch), but no worse than what mithril's
-	// own RPC handler returns today, at zero cost to mithril's RPC server.
-	ov.SlotsInEpoch = slotsPerEpoch
-	ov.SlotIndex = ov.CurrentSlot % slotsPerEpoch
+	// Epoch progress is derived here rather than polled from mithril's RPC —
+	// see estimatedSlotsPerEpoch — at zero cost to mithril's RPC server.
+	if spe := estimatedSlotsPerEpoch(ov.CurrentSlot, ov.CurrentEpoch); spe > 0 {
+		ov.SlotsInEpoch = spe
+		ov.SlotIndex = ov.CurrentSlot % spe
+	}
 	ov.TPSLive = round1(s.liveTPS())
 	return State{
 		GeneratedAt: time.Now(),

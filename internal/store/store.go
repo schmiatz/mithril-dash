@@ -44,11 +44,12 @@ type Overview struct {
 	LastShutdownReason string `json:"last_shutdown_reason"`
 	LastShutdownAt     string `json:"last_shutdown_at"`
 
-	CurrentSlot   uint64 `json:"current_slot"`
-	CurrentEpoch  uint64 `json:"current_epoch"`
-	SlotIndex     uint64 `json:"slot_index"`
-	SlotsInEpoch  uint64 `json:"slots_in_epoch"`
-	BankHashState string `json:"bank_hash_state"`
+	CurrentSlot   uint64  `json:"current_slot"`
+	CurrentEpoch  uint64  `json:"current_epoch"`
+	SlotIndex     uint64  `json:"slot_index"`
+	SlotsInEpoch  uint64  `json:"slots_in_epoch"`
+	BankHashState string  `json:"bank_hash_state"`
+	TPSLive       float64 `json:"tps_live"`
 
 	SourceLog        string `json:"source_log"`
 	SourceReplayJSON string `json:"source_replay_jsonl"`
@@ -197,6 +198,41 @@ func (s *Store) WaitForChange(since uint64, timeout time.Duration) uint64 {
 	return s.generation
 }
 
+// tpsWindow is how far back liveTPS looks for its sliding-window rate.
+const tpsWindow = 20 * time.Second
+
+// liveTPS sums txns over the trailing tpsWindow of slotStatsHist (skipped
+// slots contribute 0 txns but still mark chain progress) and divides by the
+// actual elapsed time between the oldest and newest sample in that window —
+// the same sliding-window approach the Agave dashboard this project was
+// modeled on uses for its live TPS figure. Called under s.mu.
+func (s *Store) liveTPS() float64 {
+	if len(s.slotStatsHist) == 0 {
+		return 0
+	}
+	cutoff := time.Now().Add(-tpsWindow)
+	var sum int
+	var oldest, newest time.Time
+	for i := len(s.slotStatsHist) - 1; i >= 0; i-- {
+		pt := s.slotStatsHist[i]
+		if pt.TS.Before(cutoff) {
+			break
+		}
+		sum += pt.Txns
+		if oldest.IsZero() || pt.TS.Before(oldest) {
+			oldest = pt.TS
+		}
+		if pt.TS.After(newest) {
+			newest = pt.TS
+		}
+	}
+	span := newest.Sub(oldest).Seconds()
+	if span < 0.5 {
+		return 0
+	}
+	return float64(sum) / span
+}
+
 // Snapshot returns a JSON-serializable copy of the current state.
 func (s *Store) Snapshot() State {
 	s.mu.Lock()
@@ -207,6 +243,7 @@ func (s *Store) Snapshot() State {
 	// own RPC handler returns today, at zero cost to mithril's RPC server.
 	ov.SlotsInEpoch = slotsPerEpoch
 	ov.SlotIndex = ov.CurrentSlot % slotsPerEpoch
+	ov.TPSLive = round1(s.liveTPS())
 	return State{
 		GeneratedAt: time.Now(),
 		Overview:    ov,

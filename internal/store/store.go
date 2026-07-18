@@ -57,19 +57,46 @@ type Overview struct {
 	SourceStateFile  string `json:"source_state_file"`
 }
 
-// estimatedSlotsPerEpoch derives the cluster's actual epoch length from
-// data we already have (current_slot / current_epoch) instead of assuming
-// mainnet's 432,000 — mithril's own RPC hardcodes that constant too
-// (pkg/rpcserver/get_epoch_info.go), but plenty of clusters (this one
-// included) run far shorter epochs, which made a hardcoded 432,000 turn the
-// epoch progress bar into a multi-day cycle that barely moved. Averaging
-// since genesis converges on the true epoch length once any early
-// variable-length warmup epochs are a small fraction of total slots.
-func estimatedSlotsPerEpoch(currentSlot, currentEpoch uint64) uint64 {
-	if currentEpoch == 0 {
-		return 0
+// epochAnchor caches one epoch's estimated start slot and length so the
+// progress bar is stable within an epoch. Estimating current_slot /
+// current_epoch fresh on every snapshot (the first cut of this) was wrong:
+// current_slot grows every tick while current_epoch holds steady for
+// ~54,000 slots, so the "divisor" drifted continuously and the modulo
+// result could jump — including back toward 0 — mid-epoch. Anchoring once
+// per epoch (recomputed only when the epoch number actually changes) keeps
+// slot_index a plain, monotonic current_slot - epochStartSlot for the rest
+// of that epoch. mithril's own RPC hardcodes mainnet's 432,000 regardless
+// of the cluster (pkg/rpcserver/get_epoch_info.go); we don't have RPC, so
+// this average-since-genesis estimate is the best available substitute —
+// it converges further with each additional epoch observed.
+type epochAnchor struct {
+	epoch         uint64
+	startSlot     uint64
+	slotsPerEpoch uint64
+}
+
+func (a *epochAnchor) apply(ov *Overview) {
+	if ov.CurrentEpoch == 0 {
+		return
 	}
-	return currentSlot / currentEpoch
+	if a.epoch != ov.CurrentEpoch {
+		spe := ov.CurrentSlot / ov.CurrentEpoch
+		if spe == 0 {
+			return
+		}
+		a.epoch = ov.CurrentEpoch
+		a.slotsPerEpoch = spe
+		a.startSlot = ov.CurrentEpoch * spe
+	}
+	if a.slotsPerEpoch == 0 || ov.CurrentSlot < a.startSlot {
+		return
+	}
+	ov.SlotsInEpoch = a.slotsPerEpoch
+	idx := ov.CurrentSlot - a.startSlot
+	if idx >= a.slotsPerEpoch {
+		idx = a.slotsPerEpoch - 1
+	}
+	ov.SlotIndex = idx
 }
 
 type PipelineState struct {
@@ -161,6 +188,8 @@ type Store struct {
 	slotStatsHist []SlotStatsHistPoint
 	votingHist    []VotingHistPoint
 
+	epoch epochAnchor
+
 	generation uint64
 }
 
@@ -245,11 +274,8 @@ func (s *Store) Snapshot() State {
 	defer s.mu.Unlock()
 	ov := s.overview
 	// Epoch progress is derived here rather than polled from mithril's RPC —
-	// see estimatedSlotsPerEpoch — at zero cost to mithril's RPC server.
-	if spe := estimatedSlotsPerEpoch(ov.CurrentSlot, ov.CurrentEpoch); spe > 0 {
-		ov.SlotsInEpoch = spe
-		ov.SlotIndex = ov.CurrentSlot % spe
-	}
+	// see epochAnchor — at zero cost to mithril's RPC server.
+	s.epoch.apply(&ov)
 	ov.TPSLive = round1(s.liveTPS())
 	return State{
 		GeneratedAt: time.Now(),

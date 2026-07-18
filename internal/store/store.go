@@ -198,37 +198,32 @@ func (s *Store) WaitForChange(since uint64, timeout time.Duration) uint64 {
 	return s.generation
 }
 
-// tpsWindow is how far back liveTPS looks for its sliding-window rate. 1s
-// keeps the figure feeling instantaneous; mithril's Alpenglow slot duration
-// (~200ms) means a 1s window still typically covers several samples.
-const tpsWindow = 1 * time.Second
+// tpsBlockWindow is how many of the most recent blocks liveTPS averages
+// over. A fixed block count (rather than a fixed wall-clock window) smooths
+// out the jitter of slot pacing itself: a time window's block count varies
+// tick to tick (bursts vs. gaps), which made the number visibly jump; a
+// block count always averages over the same amount of chain activity.
+const tpsBlockWindow = 30
 
-// liveTPS sums txns over the trailing tpsWindow of slotStatsHist (skipped
-// slots contribute 0 txns but still mark chain progress) and divides by the
-// actual elapsed time between the oldest and newest sample in that window —
-// the same sliding-window approach the Agave dashboard this project was
-// modeled on uses for its live TPS figure. Called under s.mu.
+// liveTPS sums txns over the trailing tpsBlockWindow blocks in
+// slotStatsHist (skipped slots contribute 0 txns but still count as a
+// block, since they still take up chain time) and divides by the actual
+// elapsed wall-clock time across that span. Called under s.mu.
 func (s *Store) liveTPS() float64 {
-	if len(s.slotStatsHist) == 0 {
+	n := len(s.slotStatsHist)
+	if n < 2 {
 		return 0
 	}
-	cutoff := time.Now().Add(-tpsWindow)
-	var sum int
-	var oldest, newest time.Time
-	for i := len(s.slotStatsHist) - 1; i >= 0; i-- {
-		pt := s.slotStatsHist[i]
-		if pt.TS.Before(cutoff) {
-			break
-		}
-		sum += pt.Txns
-		if oldest.IsZero() || pt.TS.Before(oldest) {
-			oldest = pt.TS
-		}
-		if pt.TS.After(newest) {
-			newest = pt.TS
-		}
+	start := n - tpsBlockWindow
+	if start < 0 {
+		start = 0
 	}
-	span := newest.Sub(oldest).Seconds()
+	window := s.slotStatsHist[start:]
+	var sum int
+	for _, pt := range window {
+		sum += pt.Txns
+	}
+	span := window[len(window)-1].TS.Sub(window[0].TS).Seconds()
 	if span < 0.1 {
 		return 0
 	}

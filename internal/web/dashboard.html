@@ -248,7 +248,7 @@ function update(d) {
     $('ov-epoch-sub').textContent = `${fmtNum(ov.slot_index)} / ${fmtNum(ov.slots_in_epoch)} slots (${pct.toFixed(1)}%, est.)`;
   }
   $('ov-tps').textContent = ov.tps_live !== undefined && ov.tps_live !== null ? Math.round(ov.tps_live).toLocaleString() : '–';
-  $('ov-tps-sub').textContent = 'txns/sec, last 20s';
+  $('ov-tps-sub').textContent = 'txns/sec, last 1s';
 
   // Pipeline stages table
   const rows = STAGE_ORDER.map(key => {

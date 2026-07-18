@@ -198,8 +198,10 @@ func (s *Store) WaitForChange(since uint64, timeout time.Duration) uint64 {
 	return s.generation
 }
 
-// tpsWindow is how far back liveTPS looks for its sliding-window rate.
-const tpsWindow = 20 * time.Second
+// tpsWindow is how far back liveTPS looks for its sliding-window rate. 1s
+// keeps the figure feeling instantaneous; mithril's Alpenglow slot duration
+// (~200ms) means a 1s window still typically covers several samples.
+const tpsWindow = 1 * time.Second
 
 // liveTPS sums txns over the trailing tpsWindow of slotStatsHist (skipped
 // slots contribute 0 txns but still mark chain progress) and divides by the
@@ -227,7 +229,7 @@ func (s *Store) liveTPS() float64 {
 		}
 	}
 	span := newest.Sub(oldest).Seconds()
-	if span < 0.5 {
+	if span < 0.1 {
 		return 0
 	}
 	return float64(sum) / span

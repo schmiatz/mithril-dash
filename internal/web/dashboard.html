@@ -113,12 +113,11 @@
   </div>
 
   <div class="card">
-    <div class="sec-title">System — mithril process</div>
+    <div class="sec-title">System</div>
     <div class="grid grid-4">
       <div class="stat">
         <div class="label">CPU</div>
         <div class="value" id="sys-cpu">–</div>
-        <div class="foot" id="sys-cpu-sub">–</div>
       </div>
       <div class="stat">
         <div class="label">Memory (RSS)</div>
@@ -460,7 +459,6 @@ async function loadGapChart() {
 function renderSystem(sys) {
   if (!sys || !sys.found) {
     $('sys-cpu').textContent = '–';
-    $('sys-cpu-sub').textContent = 'mithril process not found';
     $('sys-rss').textContent = '–';
     $('sys-threads').textContent = '– threads';
     $('sys-io').textContent = '–';
@@ -471,20 +469,14 @@ function renderSystem(sys) {
     return;
   }
   if (sys.num_cpu) lastNumCPU = sys.num_cpu;
-  // Headline number is normalized to TOTAL machine capacity (100% = every
-  // core maxed) — the figure most people mean by "CPU usage", and matches
-  // what tools like btop show by default. cpu_pct itself is the classic
-  // top/htop convention (100% = one core saturated, so multi-threaded work
-  // can exceed 100%) — shown as a footnote so neither reading is lost, since
-  // "118% (of 48 cores)" alone reads ambiguously as if 118% were already a
-  // whole-machine figure.
+  // Normalized to TOTAL machine capacity (100% = every core maxed) — the
+  // figure most people mean by "CPU usage", and matches what tools like
+  // btop show by default.
   if (sys.has_cpu) {
     const normalized = sys.num_cpu ? sys.cpu_pct / sys.num_cpu : sys.cpu_pct;
     $('sys-cpu').textContent = normalized.toFixed(1) + '%';
-    $('sys-cpu-sub').textContent = `${sys.cpu_pct.toFixed(0)}% of one core · ${fmtNum(sys.num_cpu)} cores total`;
   } else {
     $('sys-cpu').textContent = '–';
-    $('sys-cpu-sub').textContent = 'of ' + fmtNum(sys.num_cpu) + ' cores';
   }
   $('sys-rss').textContent = fmtBytes(sys.rss_bytes);
   $('sys-threads').textContent = fmtNum(sys.num_threads) + ' threads';

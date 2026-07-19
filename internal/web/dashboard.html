@@ -59,9 +59,24 @@
   .bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg,#818cf8,#c084fc); transition: width .5s ease; }
 
   table.stages { width: 100%; border-collapse: collapse; font-size: 13px; }
-  table.stages th, table.stages td { padding: 8px 10px; text-align: right; border-bottom: 1px solid rgba(255,255,255,.05); font-variant-numeric: tabular-nums; }
+  table.stages th, table.stages td { padding: 7px 10px; text-align: right; border-bottom: 1px solid rgba(255,255,255,.05); font-variant-numeric: tabular-nums; white-space: nowrap; }
   table.stages th:first-child, table.stages td:first-child { text-align: left; color: #94a3b8; }
   table.stages th { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: #3d5070; font-weight: 800; }
+  table.stages td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .util-cell { width: 190px; }
+  .util-row { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+  .util-track {
+    position: relative; width: 120px; height: 13px; border-radius: 3px; overflow: hidden;
+    background: repeating-linear-gradient(90deg, rgba(255,255,255,.07) 0 2px, transparent 2px 4px);
+  }
+  .util-fill {
+    position: absolute; top: 0; left: 0; height: 100%; width: 0%;
+    background: repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 4px);
+    transition: width .4s ease;
+  }
+  .util-pct { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; width: 42px; text-align: right; }
+  .spark { display: block; width: 90px; height: 22px; }
 
   .feed { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; overflow-x: hidden; min-width: 0; }
   .feed-item {
@@ -148,18 +163,16 @@
 
   <div class="card">
     <div class="sec-title">Replay pipeline</div>
-    <div class="grid grid-2" style="align-items:start; gap:20px;">
-      <div>
-        <table class="stages">
-          <thead><tr><th>stage</th><th>latest</th><th>5m avg</th><th>30m avg</th><th>1h avg</th></tr></thead>
-          <tbody id="stage-rows"></tbody>
-        </table>
-        <div class="foot" style="margin-top:10px" id="account-cache">accounts cache: –</div>
-      </div>
-      <div>
-        <canvas class="chart" id="replay-chart"></canvas>
-        <div class="foot" id="replay-total">total replay time (latest slot): –</div>
-      </div>
+    <div style="overflow-x:auto;">
+      <table class="stages">
+        <thead><tr><th>stage</th><th>latest</th><th>utilization</th><th>history</th><th>5m</th><th>30m</th><th>1h</th></tr></thead>
+        <tbody id="stage-rows"></tbody>
+      </table>
+    </div>
+    <div class="foot" style="margin-top:10px" id="account-cache">accounts cache: –</div>
+    <div style="margin-top:16px">
+      <canvas class="chart" id="replay-chart"></canvas>
+      <div class="foot" id="replay-total">total replay time (latest slot): –</div>
     </div>
   </div>
 
@@ -323,6 +336,37 @@ const STAGE_LABELS = {
 };
 const STAGE_ORDER = Object.keys(STAGE_LABELS);
 
+// Built once: the row skeleton (incl. one <canvas> per stage) is stable, so
+// update() only ever touches cell text/bar widths — recreating the <canvas>
+// nodes every SSE tick would wipe out the sparklines drawn by loadReplayChart
+// between ticks.
+function initStageTable() {
+  $('stage-rows').innerHTML = STAGE_ORDER.map(key => `
+    <tr>
+      <td>${STAGE_LABELS[key]}</td>
+      <td class="mono" id="st-${key}-latest">–</td>
+      <td class="util-cell">
+        <div class="util-row">
+          <div class="util-track"><div class="util-fill" id="st-${key}-fill"></div></div>
+          <span class="util-pct" id="st-${key}-pct">–</span>
+        </div>
+      </td>
+      <td><canvas class="spark" id="st-${key}-spark" width="90" height="22"></canvas></td>
+      <td class="mono" id="st-${key}-5m">–</td>
+      <td class="mono" id="st-${key}-30m">–</td>
+      <td class="mono" id="st-${key}-1h">–</td>
+    </tr>`).join('');
+}
+initStageTable();
+
+// Green under a third of the slot's total replay time, amber under two
+// thirds, red beyond that — mirrors which stage is currently dominating.
+function utilColor(pct) {
+  if (pct >= 66) return '#f87171';
+  if (pct >= 33) return '#fbbf24';
+  return '#34d399';
+}
+
 function update(d) {
   const ov = d.overview || {}, pl = d.pipeline || {}, bp = d.block_production || {}, vt = d.voting || {};
 
@@ -344,13 +388,21 @@ function update(d) {
 
   renderSystem(d.system);
 
-  // Pipeline stages table
-  const rows = STAGE_ORDER.map(key => {
+  // Pipeline stages table — utilization = this stage's share of the whole
+  // slot's replay time, so the bar shows which stage currently dominates.
+  STAGE_ORDER.forEach(key => {
     const latest = (pl.latest_stages || []).find(s => s.Name === key);
-    return `<tr><td>${STAGE_LABELS[key]}</td><td>${fmtMs(latest ? latest.Ms : null)}</td>
-      <td>${fmtMs((pl.avg_5m_ms||{})[key])}</td><td>${fmtMs((pl.avg_30m_ms||{})[key])}</td><td>${fmtMs((pl.avg_1h_ms||{})[key])}</td></tr>`;
-  }).join('');
-  $('stage-rows').innerHTML = rows;
+    const ms = latest ? latest.Ms : null;
+    $('st-' + key + '-latest').textContent = fmtMs(ms);
+    const pct = (ms !== null && pl.latest_total_ms) ? Math.min(100, (ms / pl.latest_total_ms) * 100) : 0;
+    const fill = $('st-' + key + '-fill');
+    fill.style.width = pct.toFixed(1) + '%';
+    fill.style.color = utilColor(pct);
+    $('st-' + key + '-pct').textContent = ms !== null ? pct.toFixed(1) + '%' : '–';
+    $('st-' + key + '-5m').textContent = fmtMs((pl.avg_5m_ms||{})[key]);
+    $('st-' + key + '-30m').textContent = fmtMs((pl.avg_30m_ms||{})[key]);
+    $('st-' + key + '-1h').textContent = fmtMs((pl.avg_1h_ms||{})[key]);
+  });
   $('replay-total').textContent = `total replay time (slot ${fmtNum(pl.latest_slot)}): ${fmtMs(pl.latest_total_ms)}`;
   if (pl.account_requested_keys) {
     const hitPct = ((pl.account_cache_hits + pl.account_index_hits) / pl.account_requested_keys * 100).toFixed(1);
@@ -578,12 +630,42 @@ function drawLineChart(canvas, series, opts) {
 
 // Charts always show the most recent samples the server returns (capped by
 // `limit`), scrolling forward as new data streams in — no window selector.
+// Tiny inline sparkline for the per-stage "history" column — deliberately
+// simpler than drawLineChart (no dpr scaling, no fill, no label): these run
+// once per stage per refresh, so they stay cheap.
+function drawSparkline(canvas, values, color) {
+  if (!canvas) return;
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  if (values.length < 2) return;
+  const max = Math.max(...values, 0.001), min = Math.min(...values, 0);
+  const range = (max - min) || 1;
+  const xAt = i => 1 + (i / (values.length - 1)) * (w - 2);
+  const yAt = v => h - 1 - ((v - min) / range) * (h - 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  values.forEach((v, i) => { const x = xAt(i), y = yAt(v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+  ctx.stroke();
+}
+
 async function loadReplayChart() {
   try {
     const res = await fetch('/history?kind=replay&limit=1500');
     const rows = await res.json();
     const series = (rows || []).map(r => ({y: r.total_ms}));
     drawLineChart($('replay-chart'), series, {color:'#818cf8', unit:'ms'});
+
+    // Per-stage sparklines share this same history fetch — each row already
+    // carries its full per-stage breakdown (see ReplayHistPoint.Stages).
+    STAGE_ORDER.forEach(key => {
+      const values = (rows || [])
+        .map(r => (r.stages || []).find(s => s.Name === key))
+        .filter(Boolean)
+        .map(s => s.Ms);
+      drawSparkline($('st-' + key + '-spark'), values, '#818cf8');
+    });
   } catch (e) {}
 }
 async function loadSlotChart() {

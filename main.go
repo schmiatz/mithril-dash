@@ -29,7 +29,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	st := store.New(cfg.Cluster, cfg.ConsensusMode)
+	st := store.New(cfg.Cluster, cfg.ConsensusMode, cfg.SlotsPerEpoch)
 
 	// 100ms keeps pace with mithril's ~200ms Alpenglow slot cadence: since we
 	// stamp each line with our own ingestion time (mithril's log timestamps

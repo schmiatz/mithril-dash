@@ -6,6 +6,7 @@ package config
 import (
 	"flag"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -34,6 +35,14 @@ type Config struct {
 	// "unknown" in the dashboard header.
 	ConsensusMode string
 	Cluster       string
+
+	// SlotsPerEpoch, when known, is the cluster's exact epoch length — set
+	// it and the epoch progress bar is exact from any cold start
+	// (slot_index = current_slot % SlotsPerEpoch), no waiting for a live
+	// epoch transition. Leave at 0 (unset) to fall back to auto-estimating
+	// it from observed (slot, epoch) pairs — see internal/store's
+	// epochAnchor — for clusters whose epoch length isn't known upfront.
+	SlotsPerEpoch uint64
 
 	ScrapeInterval    time.Duration
 	StatePollInterval time.Duration
@@ -114,9 +123,19 @@ func Load() Config {
 		"address for mithril-dash's own dashboard web server")
 	flag.DurationVar(&c.ScrapeInterval, "scrape-interval", 3*time.Second, "Prometheus scrape interval")
 	flag.DurationVar(&c.StatePollInterval, "state-poll-interval", 2*time.Second, "mithril_state.json poll interval")
+	slotsPerEpoch := flag.Uint64("slots-per-epoch", 0,
+		"exact slots-per-epoch for this cluster, if known (e.g. 54000) — makes the epoch progress bar exact immediately; 0 = auto-estimate")
 	flag.Parse()
 
 	c.ConsensusMode = mc.Consensus.Mode
 	c.Cluster = mc.Network.Cluster
+	if *slotsPerEpoch == 0 {
+		if v := os.Getenv("MITHRIL_DASH_SLOTS_PER_EPOCH"); v != "" {
+			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+				*slotsPerEpoch = n
+			}
+		}
+	}
+	c.SlotsPerEpoch = *slotsPerEpoch
 	return c
 }

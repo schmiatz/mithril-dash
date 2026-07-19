@@ -69,34 +69,24 @@ type Overview struct {
 // of the cluster (pkg/rpcserver/get_epoch_info.go); we don't have RPC, so
 // this average-since-genesis estimate is the best available substitute —
 // it converges further with each additional epoch observed.
+// epochAnchor derives SlotIndex/SlotsInEpoch from the cluster's known,
+// fixed slots-per-epoch (config.SlotsPerEpoch — e.g. 54000). Exact from any
+// cold start: no estimation, no waiting for a live epoch transition, just
+// current_slot % known. mithril's own RPC hardcodes mainnet's 432,000
+// regardless of cluster (pkg/rpcserver/get_epoch_info.go); since that's
+// often wrong and we don't poll RPC anyway, the operator tells us the real
+// value instead. If left unset (0), the epoch progress bar simply doesn't
+// render (Overview.SlotsInEpoch stays 0) rather than guess.
 type epochAnchor struct {
-	epoch         uint64
-	startSlot     uint64
-	slotsPerEpoch uint64
+	known uint64
 }
 
 func (a *epochAnchor) apply(ov *Overview) {
-	if ov.CurrentEpoch == 0 {
+	if a.known == 0 {
 		return
 	}
-	if a.epoch != ov.CurrentEpoch {
-		spe := ov.CurrentSlot / ov.CurrentEpoch
-		if spe == 0 {
-			return
-		}
-		a.epoch = ov.CurrentEpoch
-		a.slotsPerEpoch = spe
-		a.startSlot = ov.CurrentEpoch * spe
-	}
-	if a.slotsPerEpoch == 0 || ov.CurrentSlot < a.startSlot {
-		return
-	}
-	ov.SlotsInEpoch = a.slotsPerEpoch
-	idx := ov.CurrentSlot - a.startSlot
-	if idx >= a.slotsPerEpoch {
-		idx = a.slotsPerEpoch - 1
-	}
-	ov.SlotIndex = idx
+	ov.SlotsInEpoch = a.known
+	ov.SlotIndex = ov.CurrentSlot % a.known
 }
 
 type PipelineState struct {
@@ -193,7 +183,7 @@ type Store struct {
 	generation uint64
 }
 
-func New(cluster, consensusMode string) *Store {
+func New(cluster, consensusMode string, slotsPerEpoch uint64) *Store {
 	s := &Store{
 		pipeline: PipelineState{
 			Avg5mMs:           map[string]float64{},
@@ -203,6 +193,7 @@ func New(cluster, consensusMode string) *Store {
 			PromCountTotal:    map[string]uint64{},
 		},
 		blockProd: BlockProdState{Outcomes: map[string]map[string]float64{}},
+		epoch:     epochAnchor{known: slotsPerEpoch},
 	}
 	s.overview.Cluster = cluster
 	s.overview.ConsensusMode = consensusMode

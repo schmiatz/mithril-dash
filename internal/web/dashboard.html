@@ -75,12 +75,6 @@
   .feed-detail { color: #64748b; margin-left: auto; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
   .empty { color: #3d5070; font-size: 12px; padding: 10px 0; }
 
-  .chart-btns { display: flex; gap: 8px; margin-bottom: 10px; }
-  .chart-btn {
-    font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 14px; cursor: pointer;
-    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09); color: #94a3b8;
-  }
-  .chart-btn.active { background: rgba(129,140,248,.18); color: #c4b5fd; border-color: rgba(129,140,248,.35); }
   canvas.chart { width: 100%; height: 180px; display: block; }
 </style>
 </head>
@@ -94,7 +88,6 @@
         <h1>Mithril Alpenglow</h1>
       </div>
     </div>
-    <div class="chart-btns" id="global-chart-btns"></div>
   </div>
 
   <div class="card">
@@ -285,7 +278,7 @@ function update(d) {
   if (ov.slots_in_epoch) {
     const pct = Math.min(100, (ov.slot_index / ov.slots_in_epoch) * 100);
     $('ov-epoch-bar').style.width = pct.toFixed(2) + '%';
-    $('ov-epoch-sub').textContent = `${fmtNum(ov.slot_index)} / ${fmtNum(ov.slots_in_epoch)} slots (${pct.toFixed(1)}%, est.)`;
+    $('ov-epoch-sub').textContent = `${fmtNum(ov.slot_index)} / ${fmtNum(ov.slots_in_epoch)} slots (${pct.toFixed(1)}%)`;
   }
   $('ov-tps').textContent = ov.tps_live !== undefined && ov.tps_live !== null ? Math.round(ov.tps_live).toLocaleString() : '–';
   $('ov-tps-sub').textContent = 'txns/sec, last 30 blocks';
@@ -403,7 +396,7 @@ async function loadGapChart() {
   try {
     const res = await fetch('/history?kind=slot_summary&limit=1500');
     const rows = await res.json();
-    const windowed = filterByWindow((rows || []).filter(r => r.has_gap), 'ts');
+    const windowed = (rows || []).filter(r => r.has_gap);
     const replaySeries = windowed.map(r => ({y: r.replay_gap}));
     const fullSeries = windowed.map(r => ({y: r.full_gap}));
     drawLineChart($('summary-gap-chart'), replaySeries, {color: '#818cf8', color2: '#fbbf24', series2: fullSeries, unit: ' slots'});
@@ -465,43 +458,13 @@ function drawLineChart(canvas, series, opts) {
   ctx.fillText(maxY.toFixed(1) + (opts.unit||''), 4, 12);
 }
 
-// ---- Global chart time window (applies to every chart) ----
-const WINDOW_OPTIONS = [
-  {key: 'live', label: 'Live'},
-  {key: 60, label: '1m'},
-  {key: 300, label: '5m'},
-  {key: 900, label: '15m'},
-  {key: 1800, label: '30m'},
-  {key: 3600, label: '1h'},
-];
-let chartWindow = 'live';
-
-function renderGlobalChartBtns() {
-  $('global-chart-btns').innerHTML = WINDOW_OPTIONS.map(o =>
-    `<button class="chart-btn ${chartWindow === o.key ? 'active' : ''}" data-w="${o.key}">${o.label}</button>`
-  ).join('');
-  $('global-chart-btns').querySelectorAll('button').forEach(b => b.onclick = () => {
-    chartWindow = b.dataset.w === 'live' ? 'live' : Number(b.dataset.w);
-    renderGlobalChartBtns();
-    loadAllCharts();
-  });
-}
-renderGlobalChartBtns();
-
-// 'live' means no time cutoff — just show the most recent samples returned
-// by the server (still capped by `limit`), so the chart keeps scrolling as
-// new data streams in instead of being pinned to a fixed window.
-function filterByWindow(rows, tsKey) {
-  if (chartWindow === 'live') return rows;
-  const cutoff = Date.now() - chartWindow * 1000;
-  return rows.filter(r => new Date(r[tsKey]).getTime() >= cutoff);
-}
-
+// Charts always show the most recent samples the server returns (capped by
+// `limit`), scrolling forward as new data streams in — no window selector.
 async function loadReplayChart() {
   try {
     const res = await fetch('/history?kind=replay&limit=1500');
     const rows = await res.json();
-    const series = filterByWindow(rows || [], 'ts').map(r => ({y: r.total_ms}));
+    const series = (rows || []).map(r => ({y: r.total_ms}));
     drawLineChart($('replay-chart'), series, {color:'#818cf8', unit:'ms'});
   } catch (e) {}
 }
@@ -509,7 +472,7 @@ async function loadSlotChart() {
   try {
     const res = await fetch('/history?kind=slot_stats&limit=1500');
     const rows = await res.json();
-    const series = filterByWindow((rows || []).filter(r => !r.skipped), 'ts').map(r => ({y: r.exec_ms}));
+    const series = (rows || []).filter(r => !r.skipped).map(r => ({y: r.exec_ms}));
     drawLineChart($('slot-chart'), series, {color:'#34d399', unit:'ms'});
   } catch (e) {}
 }
@@ -517,10 +480,9 @@ async function loadVoteChart() {
   try {
     const res = await fetch('/history?kind=voting&limit=1500');
     const rows = await res.json();
-    const windowed = filterByWindow(rows || [], 'ts');
     const series = [];
-    for (let i = 1; i < windowed.length; i++) {
-      series.push({y: Math.max(0, windowed[i].network_landed - windowed[i-1].network_landed)});
+    for (let i = 1; i < (rows || []).length; i++) {
+      series.push({y: Math.max(0, rows[i].network_landed - rows[i-1].network_landed)});
     }
     drawLineChart($('vote-chart'), series, {color:'#fbbf24', unit:''});
   } catch (e) {}

@@ -60,8 +60,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	writeSnapshot := func() bool {
-		snap := s.store.Snapshot()
-		b, err := json.Marshal(snap)
+		b, err := s.store.SnapshotJSON()
 		if err != nil {
 			return true
 		}

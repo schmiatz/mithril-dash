@@ -1,12 +1,13 @@
 // Package store is mithril-dash's central in-memory aggregator: every
 // collector (log tailer, replay_timings.jsonl tailer, Prometheus scraper,
 // state-file poller) feeds events in here through one of the Apply* methods;
-// the web layer only ever reads Snapshot() and the History ring buffers. One
-// mutex + condition variable, mirroring the pattern of a single-process
+// the web layer only ever reads SnapshotJSON() and the History ring buffers.
+// One mutex + condition variable, mirroring the pattern of a single-process
 // Python/Flask dashboard translated into idiomatic Go.
 package store
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -381,7 +382,17 @@ func (s *Store) liveTPS() float64 {
 }
 
 // Snapshot returns a JSON-serializable copy of the current state.
-func (s *Store) Snapshot() State {
+// SnapshotJSON marshals the current state to JSON while still holding s.mu.
+// State's fields (PipelineState/BlockProdState in particular) contain maps
+// and slices; copying the surrounding structs by value — as a Snapshot()
+// returning State used to do — only copies the map/slice headers, leaving
+// the returned copy aliasing the SAME underlying map/array the Apply*
+// methods keep mutating under the lock. json.Marshal walks those maps via
+// reflection, so marshaling a released snapshot outside the lock races
+// against those writers and can hit Go's "concurrent map iteration and map
+// write" fatal error. Doing the marshal itself inside the critical section
+// is the only fix that doesn't require deep-copying every mutable field.
+func (s *Store) SnapshotJSON() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ov := s.overview
@@ -389,7 +400,7 @@ func (s *Store) Snapshot() State {
 	// see epochAnchor — at zero cost to mithril's RPC server.
 	s.epoch.apply(&ov)
 	ov.TPSLive = round1(s.liveTPS())
-	return State{
+	return json.Marshal(State{
 		GeneratedAt: time.Now(),
 		Overview:    ov,
 		Pipeline:    s.pipeline,
@@ -397,7 +408,7 @@ func (s *Store) Snapshot() State {
 		Voting:      s.voting,
 		Summary:     s.summary,
 		System:      s.system,
-	}
+	})
 }
 
 func (s *Store) Generation() uint64 {

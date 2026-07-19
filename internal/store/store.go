@@ -18,6 +18,7 @@ const (
 	maxReplayHistory = 3000
 	maxSlotStatsHist = 3000
 	maxVotingHistory = 3600 // ~1h at 1 sample/s
+	maxSlotSummary   = 2000 // one point every 100 slots (~20s at 200ms/slot) — 2000 covers many hours
 )
 
 type sourceHealth struct {
@@ -57,18 +58,6 @@ type Overview struct {
 	SourceStateFile  string `json:"source_state_file"`
 }
 
-// epochAnchor caches one epoch's estimated start slot and length so the
-// progress bar is stable within an epoch. Estimating current_slot /
-// current_epoch fresh on every snapshot (the first cut of this) was wrong:
-// current_slot grows every tick while current_epoch holds steady for
-// ~54,000 slots, so the "divisor" drifted continuously and the modulo
-// result could jump — including back toward 0 — mid-epoch. Anchoring once
-// per epoch (recomputed only when the epoch number actually changes) keeps
-// slot_index a plain, monotonic current_slot - epochStartSlot for the rest
-// of that epoch. mithril's own RPC hardcodes mainnet's 432,000 regardless
-// of the cluster (pkg/rpcserver/get_epoch_info.go); we don't have RPC, so
-// this average-since-genesis estimate is the best available substitute —
-// it converges further with each additional epoch observed.
 // epochAnchor derives SlotIndex/SlotsInEpoch from the cluster's known,
 // fixed slots-per-epoch (config.SlotsPerEpoch — e.g. 54000). Exact from any
 // cold start: no estimation, no waiting for a live epoch transition, just
@@ -127,6 +116,81 @@ type State struct {
 	Pipeline    PipelineState  `json:"pipeline"`
 	BlockProd   BlockProdState `json:"block_production"`
 	Voting      VotingState    `json:"voting"`
+	Summary     Summary        `json:"summary"`
+}
+
+// Summary mirrors the latest parsed collect.SlotSummaryEvent — mithril's
+// periodic ("every 100 slots") replay summary block, the richest single
+// health snapshot it logs. JSON field names diverge from the Go source
+// struct only where clarity needs it; otherwise this is a close 1:1 mirror.
+type Summary struct {
+	TS     time.Time `json:"ts"`
+	Source string    `json:"source"`
+
+	SlotsPerSec float64 `json:"slots_per_sec"`
+	HasGap      bool    `json:"has_gap"`
+	ReplayGap   int64   `json:"replay_gap"`
+	FullGap     int64   `json:"full_gap"`
+	Skipped     int     `json:"skipped"`
+	WithShreds  int     `json:"with_shreds"`
+	EmptyBlocks int     `json:"empty_blocks"`
+
+	HasFinalized   bool   `json:"has_finalized"`
+	FinalizedSlot  uint64 `json:"finalized_slot"`
+	Switches       int    `json:"switches"`
+	SwitchInRAM    int    `json:"switch_in_ram"`
+	SwitchFallback int    `json:"switch_fallback"`
+
+	HasExecChecked  bool   `json:"has_exec_checked"`
+	ExecCheckedSlot uint64 `json:"exec_checked_slot"`
+	Holds           int    `json:"holds"`
+
+	HasShredStats   bool    `json:"has_shred_stats"`
+	ShredReadyMed   float64 `json:"shred_ready_med"`
+	ShredReadyWorst float64 `json:"shred_ready_worst"`
+	ShredAsmMed     float64 `json:"shred_asm_med"`
+	ShredAsmMax     float64 `json:"shred_asm_max"`
+
+	HasRepair    bool   `json:"has_repair"`
+	RepairSlots  int    `json:"repair_slots"`
+	RepairShreds int    `json:"repair_shreds"`
+	PeerQuality  string `json:"peer_quality"`
+
+	TxnsMedian    float64 `json:"txns_median"`
+	TxnsP90       float64 `json:"txns_p90"`
+	TxnsMax       float64 `json:"txns_max"`
+	CuPerTxMedian string  `json:"cu_per_tx_median"`
+	CuPerTxP90    string  `json:"cu_per_tx_p90"`
+
+	CuMedian string `json:"cu_median"`
+	CuP90    string `json:"cu_p90"`
+	CuMax    string `json:"cu_max"`
+
+	ExecMedianMs float64 `json:"exec_median_ms"`
+	ExecP95Ms    float64 `json:"exec_p95_ms"`
+	ExecMaxMs    float64 `json:"exec_max_ms"`
+	SlowBlocks   int     `json:"slow_blocks"`
+
+	EffMedian float64 `json:"eff_median"`
+	EffP95    float64 `json:"eff_p95"`
+	EffMax    float64 `json:"eff_max"`
+
+	HasRSS       bool    `json:"has_rss"`
+	RssGiB       float64 `json:"rss_gib"`
+	HeapGiB      float64 `json:"heap_gib"`
+	HeapInuseGiB float64 `json:"heap_inuse_gib"`
+	GCDelta      int     `json:"gc_delta"`
+}
+
+// SlotSummaryHistPoint is one 100-slot-summary sample, kept for the "slots
+// behind" chart — sparser than the other charts (one point per ~100 slots,
+// not per-slot) since that's the underlying signal's real cadence.
+type SlotSummaryHistPoint struct {
+	TS          time.Time `json:"ts"`
+	SlotsPerSec float64   `json:"slots_per_sec"`
+	HasGap      bool      `json:"has_gap"`
+	ReplayGap   int64     `json:"replay_gap"`
+	FullGap     int64     `json:"full_gap"`
 }
 
 // ReplayHistPoint is one replay_timings.jsonl-derived sample, kept for the
@@ -174,9 +238,12 @@ type Store struct {
 	promHealth   sourceHealth
 	stateHealth  sourceHealth
 
-	replayHist    []ReplayHistPoint
-	slotStatsHist []SlotStatsHistPoint
-	votingHist    []VotingHistPoint
+	replayHist      []ReplayHistPoint
+	slotStatsHist   []SlotStatsHistPoint
+	votingHist      []VotingHistPoint
+	slotSummaryHist []SlotSummaryHistPoint
+
+	summary Summary
 
 	epoch epochAnchor
 
@@ -274,6 +341,7 @@ func (s *Store) Snapshot() State {
 		Pipeline:    s.pipeline,
 		BlockProd:   s.blockProd,
 		Voting:      s.voting,
+		Summary:     s.summary,
 	}
 }
 
@@ -286,9 +354,10 @@ func (s *Store) Generation() uint64 {
 type HistoryKind string
 
 const (
-	HistoryReplay    HistoryKind = "replay"
-	HistorySlotStats HistoryKind = "slot_stats"
-	HistoryVoting    HistoryKind = "voting"
+	HistoryReplay      HistoryKind = "replay"
+	HistorySlotStats   HistoryKind = "slot_stats"
+	HistoryVoting      HistoryKind = "voting"
+	HistorySlotSummary HistoryKind = "slot_summary"
 )
 
 // History returns up to `limit` most recent points of the given kind.
@@ -302,6 +371,8 @@ func (s *Store) History(kind HistoryKind, limit int) interface{} {
 		return lastN(s.slotStatsHist, limit)
 	case HistoryVoting:
 		return lastN(s.votingHist, limit)
+	case HistorySlotSummary:
+		return lastN(s.slotSummaryHist, limit)
 	default:
 		return nil
 	}
@@ -442,6 +513,46 @@ func (s *Store) ApplyNodeState(ns collect.NodeState) {
 	}
 	s.overview.CurrentSlot = maxU64(s.overview.CurrentSlot, ns.LastSlot)
 	s.overview.CurrentEpoch = maxU64(s.overview.CurrentEpoch, ns.LastEpoch)
+
+	s.touch()
+}
+
+// ApplySlotSummary ingests one completed 100-slot summary block (see
+// collect.SlotSummaryAccumulator). Fed separately from ApplyLogEvent since
+// it's assembled by the accumulator across several consecutive log lines,
+// not parsed from a single one.
+func (s *Store) ApplySlotSummary(e collect.SlotSummaryEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.logHealth.LastAt = time.Now()
+	s.overview.SourceLog = s.logHealth.Status()
+
+	s.summary = Summary{
+		TS: e.TS, Source: e.Source,
+		SlotsPerSec: e.SlotsPerSec, HasGap: e.HasGap, ReplayGap: e.ReplayGap, FullGap: e.FullGap,
+		Skipped: e.Skipped, WithShreds: e.WithShreds, EmptyBlocks: e.EmptyBlocks,
+		HasFinalized: e.HasFinalized, FinalizedSlot: e.FinalizedSlot,
+		Switches: e.Switches, SwitchInRAM: e.SwitchInRAM, SwitchFallback: e.SwitchFallback,
+		HasExecChecked: e.HasExecChecked, ExecCheckedSlot: e.ExecCheckedSlot, Holds: e.Holds,
+		HasShredStats: e.HasShredStats, ShredReadyMed: e.ShredReadyMed, ShredReadyWorst: e.ShredReadyWorst,
+		ShredAsmMed: e.ShredAsmMed, ShredAsmMax: e.ShredAsmMax,
+		HasRepair: e.HasRepair, RepairSlots: e.RepairSlots, RepairShreds: e.RepairShreds, PeerQuality: e.PeerQuality,
+		TxnsMedian: e.TxnsMedian, TxnsP90: e.TxnsP90, TxnsMax: e.TxnsMax,
+		CuPerTxMedian: e.CuPerTxMedian, CuPerTxP90: e.CuPerTxP90,
+		CuMedian: e.CuMedian, CuP90: e.CuP90, CuMax: e.CuMax,
+		ExecMedianMs: e.ExecMedianMs, ExecP95Ms: e.ExecP95Ms, ExecMaxMs: e.ExecMaxMs, SlowBlocks: e.SlowBlocks,
+		EffMedian: e.EffMedian, EffP95: e.EffP95, EffMax: e.EffMax,
+		HasRSS: e.HasRSS, RssGiB: e.RssGiB, HeapGiB: e.HeapGiB, HeapInuseGiB: e.HeapInuseGiB, GCDelta: e.GCDelta,
+	}
+
+	s.slotSummaryHist = appendCapped(s.slotSummaryHist, SlotSummaryHistPoint{
+		TS: e.TS, SlotsPerSec: e.SlotsPerSec, HasGap: e.HasGap, ReplayGap: e.ReplayGap, FullGap: e.FullGap,
+	}, maxSlotSummary)
+
+	if e.HasFinalized {
+		s.overview.CurrentSlot = maxU64(s.overview.CurrentSlot, e.FinalizedSlot)
+	}
 
 	s.touch()
 }

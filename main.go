@@ -39,6 +39,7 @@ func main() {
 	// starve the 1s-window live-TPS calc in store.go of real spacing.
 	const logPollInterval = 100 * time.Millisecond
 
+	var slotSummary collect.SlotSummaryAccumulator
 	logTailer := &collect.Tailer{
 		BaseDir:      cfg.LogDir,
 		FileName:     "mithril.log",
@@ -46,6 +47,13 @@ func main() {
 		OnLine: func(line string) {
 			if ev := collect.ParseMithrilLogLine(line); ev != nil {
 				st.ApplyLogEvent(ev)
+			}
+			// Every raw line also feeds the "100 Slot Summary" accumulator
+			// (a separate, stateful multi-line parse) since it's the only
+			// place mithril reports how far replay is behind the turbine
+			// shred tip it has received.
+			if summary, ok := slotSummary.Feed(line); ok {
+				st.ApplySlotSummary(summary)
 			}
 		},
 	}

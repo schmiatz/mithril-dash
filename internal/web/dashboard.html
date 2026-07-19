@@ -137,6 +137,46 @@
   </div>
 
   <div class="card">
+    <div class="sec-title">100-slot summary</div>
+    <div class="grid grid-4">
+      <div class="stat">
+        <div class="label">Slots/sec</div>
+        <div class="value" id="sum-sps">–</div>
+        <div class="foot" id="sum-source">source: –</div>
+      </div>
+      <div class="stat">
+        <div class="label">Skipped / empty</div>
+        <div class="value small" id="sum-skipped">–</div>
+        <div class="foot">last 100 slots</div>
+      </div>
+      <div class="stat">
+        <div class="label">Finalized slot</div>
+        <div class="value" id="sum-finalized">–</div>
+        <div class="foot" id="sum-switches">switches: –</div>
+      </div>
+      <div class="stat">
+        <div class="label">Resources</div>
+        <div class="value small" id="sum-resources">–</div>
+        <div class="foot" id="sum-gc">gc: –</div>
+      </div>
+    </div>
+    <div class="grid grid-2" style="margin-top:16px; align-items:start; gap:20px;">
+      <div>
+        <canvas class="chart" id="summary-gap-chart"></canvas>
+        <div class="foot"><span style="color:#818cf8">■</span> replay gap &nbsp; <span style="color:#fbbf24">■</span> full gap — slots behind the turbine shred tip</div>
+      </div>
+      <div>
+        <table class="stages">
+          <thead><tr><th>metric</th><th>median</th><th>p90/worst</th><th>max</th></tr></thead>
+          <tbody id="summary-rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="foot" style="margin-top:12px" id="sum-repair">repair: –</div>
+    <div class="foot" id="sum-safety">exec checked slot: –</div>
+  </div>
+
+  <div class="card">
     <div class="sec-title">Block production</div>
     <div class="grid grid-4">
       <div class="stat">
@@ -263,6 +303,8 @@ function update(d) {
     $('account-cache').textContent = `accounts cache: ${hitPct}% hit (${fmtNum(pl.account_requested_keys)} keys requested, ${fmtNum(pl.account_index_misses)} misses)`;
   }
 
+  renderSummary(d.summary);
+
   // Block production
   const ls = bp.latest_slot_stats;
   if (ls) {
@@ -326,14 +368,60 @@ function update(d) {
   ).join('') : '<div class="empty">waiting…</div>';
 }
 
+// ---- 100-slot summary (pkg/replay/block.go's periodic multi-line report) ----
+function renderSummary(sum) {
+  if (!sum || !sum.ts) return;
+
+  $('sum-sps').textContent = sum.slots_per_sec.toFixed(1);
+  $('sum-source').textContent = 'source: ' + (sum.source || '–');
+  $('sum-skipped').textContent = `${fmtNum(sum.skipped)} skipped / ${fmtNum(sum.empty_blocks)} empty`;
+  $('sum-finalized').textContent = sum.has_finalized ? fmtNum(sum.finalized_slot) : '–';
+  $('sum-switches').textContent = 'switches: ' + fmtNum(sum.switches)
+    + ((sum.switch_in_ram || sum.switch_fallback) ? ` (in-RAM ${sum.switch_in_ram}, fallback ${sum.switch_fallback})` : '');
+  $('sum-resources').textContent = (sum.has_rss ? sum.rss_gib.toFixed(1) + 'GiB rss, ' : '') + sum.heap_gib.toFixed(1) + 'GiB heap';
+  $('sum-gc').textContent = 'gc: +' + fmtNum(sum.gc_delta);
+
+  const rows = [
+    ['Execution (p95)', fmtMs(sum.exec_median_ms), fmtMs(sum.exec_p95_ms), fmtMs(sum.exec_max_ms)],
+    ['Efficiency (p95)', sum.eff_median.toFixed(1) + 'ms/Mcu', sum.eff_p95.toFixed(1) + 'ms/Mcu', sum.eff_max.toFixed(1) + 'ms/Mcu'],
+    ['Txns (p90)', fmtNum(sum.txns_median), fmtNum(sum.txns_p90), fmtNum(sum.txns_max)],
+    ['CU (p90)', sum.cu_median, sum.cu_p90, sum.cu_max],
+  ];
+  if (sum.has_shred_stats) {
+    rows.push(['Shreds ready (worst)', sum.shred_ready_med.toFixed(1) + 's', (sum.shred_ready_worst >= 0 ? '+' : '') + sum.shred_ready_worst.toFixed(1) + 's', '–']);
+    rows.push(['Shreds asm (max)', sum.shred_asm_med.toFixed(1) + 's', '–', sum.shred_asm_max.toFixed(1) + 's']);
+  }
+  $('summary-rows').innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join('');
+
+  $('sum-repair').textContent = sum.has_repair
+    ? `repair: ${fmtNum(sum.repair_slots)} slots, ${fmtNum(sum.repair_shreds)} shreds${sum.peer_quality ? ' | ' + sum.peer_quality : ''}`
+    : 'repair: –';
+  $('sum-safety').textContent = 'exec checked slot: ' + (sum.has_exec_checked ? fmtNum(sum.exec_checked_slot) : '–') + ' | holds ' + fmtNum(sum.holds);
+}
+
+async function loadGapChart() {
+  try {
+    const res = await fetch('/history?kind=slot_summary&limit=1500');
+    const rows = await res.json();
+    const windowed = filterByWindow((rows || []).filter(r => r.has_gap), 'ts');
+    const replaySeries = windowed.map(r => ({y: r.replay_gap}));
+    const fullSeries = windowed.map(r => ({y: r.full_gap}));
+    drawLineChart($('summary-gap-chart'), replaySeries, {color: '#818cf8', color2: '#fbbf24', series2: fullSeries, unit: ' slots'});
+  } catch (e) {}
+}
+
 // ---- SSE ----
 const es = new EventSource('/events');
 es.onmessage = (ev) => { try { update(JSON.parse(ev.data)); } catch (e) { console.error(e); } };
 es.onerror = () => { console.warn('mithril-dash: SSE connection lost, browser will retry'); };
 
 // ---- Generic canvas line chart ----
+// opts.series2 (optional) overlays a second, stroke-only line (no fill) in
+// opts.color2 — sharing series1's Y domain so the two stay comparable (e.g.
+// replay gap vs. full gap: both "slots behind", very different magnitudes).
 function drawLineChart(canvas, series, opts) {
   opts = opts || {};
+  const series2 = opts.series2 || [];
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   const w = Math.max(200, rect.width), h = canvas.clientHeight || 180;
@@ -341,27 +429,37 @@ function drawLineChart(canvas, series, opts) {
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
-  if (!series.length) {
+  if (!series.length && !series2.length) {
     ctx.fillStyle = '#3d5070'; ctx.font = '12px sans-serif';
     ctx.fillText('waiting for data…', 10, h/2);
     return;
   }
   const pad = 8;
-  const ys = series.map(p => p.y);
-  let maxY = Math.max(...ys, 0.001), minY = Math.min(...ys, 0);
+  const allY = series.map(p => p.y).concat(series2.map(p => p.y));
+  let maxY = Math.max(...allY, 0.001), minY = Math.min(...allY, 0);
   if (minY > 0) minY = 0;
-  const xN = series.length;
-  const xAt = i => pad + (i/(Math.max(1,xN-1))) * (w - pad*2);
   const yAt = v => h - pad - ((v - minY)/(maxY - minY || 1)) * (h - pad*2);
+  const xAtFor = n => i => pad + (i/(Math.max(1,n-1))) * (w - pad*2);
 
-  ctx.strokeStyle = opts.color || '#818cf8';
-  ctx.lineWidth = 1.6;
-  ctx.beginPath();
-  series.forEach((p,i) => { const x = xAt(i), y = yAt(p.y); i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); });
-  ctx.stroke();
+  if (series.length) {
+    const xAt = xAtFor(series.length);
+    ctx.strokeStyle = opts.color || '#818cf8';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    series.forEach((p,i) => { const x = xAt(i), y = yAt(p.y); i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); });
+    ctx.stroke();
+    ctx.fillStyle = (opts.color || '#818cf8') + '22';
+    ctx.lineTo(xAt(series.length-1), h-pad); ctx.lineTo(xAt(0), h-pad); ctx.closePath(); ctx.fill();
+  }
 
-  ctx.fillStyle = (opts.color || '#818cf8') + '22';
-  ctx.lineTo(xAt(xN-1), h-pad); ctx.lineTo(xAt(0), h-pad); ctx.closePath(); ctx.fill();
+  if (series2.length) {
+    const xAt2 = xAtFor(series2.length);
+    ctx.strokeStyle = opts.color2 || '#fbbf24';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    series2.forEach((p,i) => { const x = xAt2(i), y = yAt(p.y); i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y); });
+    ctx.stroke();
+  }
 
   ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif';
   ctx.fillText(maxY.toFixed(1) + (opts.unit||''), 4, 12);
@@ -428,7 +526,7 @@ async function loadVoteChart() {
   } catch (e) {}
 }
 
-function loadAllCharts() { loadReplayChart(); loadSlotChart(); loadVoteChart(); }
+function loadAllCharts() { loadReplayChart(); loadSlotChart(); loadVoteChart(); loadGapChart(); }
 loadAllCharts();
 setInterval(loadAllCharts, 4000);
 window.addEventListener('resize', loadAllCharts);

@@ -113,6 +113,37 @@
   </div>
 
   <div class="card">
+    <div class="sec-title">System — mithril process</div>
+    <div class="grid grid-4">
+      <div class="stat">
+        <div class="label">CPU</div>
+        <div class="value" id="sys-cpu">–</div>
+        <div class="foot" id="sys-cpu-sub">–</div>
+      </div>
+      <div class="stat">
+        <div class="label">Memory (RSS)</div>
+        <div class="value" id="sys-rss">–</div>
+        <div class="foot" id="sys-threads">– threads</div>
+      </div>
+      <div class="stat">
+        <div class="label">Disk I/O (read/write)</div>
+        <div class="value small" id="sys-io">–</div>
+        <div class="foot" id="sys-io-note"></div>
+        <div class="foot" id="sys-fds">open FDs: –</div>
+      </div>
+      <div class="stat">
+        <div class="label">Process</div>
+        <div class="value" id="sys-pid">–</div>
+        <div class="foot" id="sys-uptime">uptime: –</div>
+      </div>
+    </div>
+    <div style="margin-top:16px">
+      <canvas class="chart" id="system-cpu-chart"></canvas>
+      <div class="foot">CPU % over time (100% = one core saturated)</div>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="sec-title">Replay pipeline</div>
     <div class="grid grid-2" style="align-items:start; gap:20px;">
       <div>
@@ -254,6 +285,26 @@
 const $ = id => document.getElementById(id);
 function fmtNum(n) { return n === undefined || n === null ? '–' : Number(n).toLocaleString(); }
 function fmtMs(n) { return (n === undefined || n === null) ? '–' : Number(n).toFixed(1) + 'ms'; }
+function fmtBytes(b) {
+  if (b === undefined || b === null) return '–';
+  const gib = b / (1024**3);
+  return gib >= 1 ? gib.toFixed(2) + ' GiB' : (b / (1024**2)).toFixed(0) + ' MiB';
+}
+function fmtBps(bps) {
+  if (bps === undefined || bps === null) return '–';
+  const mb = bps / 1e6;
+  return mb >= 1 ? mb.toFixed(1) + ' MB/s' : (bps / 1e3).toFixed(0) + ' KB/s';
+}
+function fmtDuration(secs) {
+  if (secs === undefined || secs === null) return '–';
+  secs = Math.max(0, Math.round(secs));
+  const d = Math.floor(secs / 86400); secs -= d * 86400;
+  const h = Math.floor(secs / 3600); secs -= h * 3600;
+  const m = Math.floor(secs / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
 function fmtAgo(ts) {
   if (!ts) return '–';
   const s = Math.max(0, Math.round((Date.now() - new Date(ts).getTime())/1000));
@@ -282,6 +333,8 @@ function update(d) {
   }
   $('ov-tps').textContent = ov.tps_live !== undefined && ov.tps_live !== null ? Math.round(ov.tps_live).toLocaleString() : '–';
   $('ov-tps-sub').textContent = 'txns/sec, last 30 blocks';
+
+  renderSystem(d.system);
 
   // Pipeline stages table
   const rows = STAGE_ORDER.map(key => {
@@ -403,6 +456,50 @@ async function loadGapChart() {
   } catch (e) {}
 }
 
+// ---- System (mithril's own OS process, polled from /proc — Linux only) ----
+function renderSystem(sys) {
+  if (!sys || !sys.found) {
+    $('sys-cpu').textContent = '–';
+    $('sys-cpu-sub').textContent = 'mithril process not found';
+    $('sys-rss').textContent = '–';
+    $('sys-threads').textContent = '– threads';
+    $('sys-io').textContent = '–';
+    $('sys-io-note').textContent = '';
+    $('sys-fds').textContent = 'open FDs: –';
+    $('sys-pid').textContent = '–';
+    $('sys-uptime').textContent = 'uptime: –';
+    return;
+  }
+  $('sys-cpu').textContent = sys.has_cpu ? sys.cpu_pct.toFixed(0) + '%' : '–';
+  $('sys-cpu-sub').textContent = 'of ' + fmtNum(sys.num_cpu) + ' cores';
+  $('sys-rss').textContent = fmtBytes(sys.rss_bytes);
+  $('sys-threads').textContent = fmtNum(sys.num_threads) + ' threads';
+  $('sys-io').textContent = sys.has_io ? `${fmtBps(sys.disk_read_bps)} / ${fmtBps(sys.disk_write_bps)}` : '–';
+  // Flag tmpfs explicitly: /proc/<pid>/io only counts bytes that crossed a
+  // real storage layer, so a tmpfs-backed accounts DB reads as ~0 disk I/O
+  // no matter how hard it's hit — without this note that's indistinguishable
+  // from "disk is idle".
+  if (sys.has_accounts_fs) {
+    $('sys-io-note').textContent = sys.accounts_is_tmpfs
+      ? `accounts DB on tmpfs (RAM) — expect ~0 here regardless of load`
+      : `accounts DB on ${sys.accounts_fs_type}`;
+  } else {
+    $('sys-io-note').textContent = '';
+  }
+  $('sys-fds').textContent = 'open FDs: ' + (sys.has_fd ? fmtNum(sys.open_fds) : '–');
+  $('sys-pid').textContent = fmtNum(sys.pid);
+  $('sys-uptime').textContent = 'uptime: ' + (sys.has_uptime ? fmtDuration(sys.uptime_secs) : '–');
+}
+
+async function loadSystemChart() {
+  try {
+    const res = await fetch('/history?kind=system&limit=1500');
+    const rows = await res.json();
+    const series = (rows || []).map(r => ({y: r.cpu_pct}));
+    drawLineChart($('system-cpu-chart'), series, {color: '#34d399', unit: '%'});
+  } catch (e) {}
+}
+
 // ---- SSE ----
 const es = new EventSource('/events');
 es.onmessage = (ev) => { try { update(JSON.parse(ev.data)); } catch (e) { console.error(e); } };
@@ -488,7 +585,7 @@ async function loadVoteChart() {
   } catch (e) {}
 }
 
-function loadAllCharts() { loadReplayChart(); loadSlotChart(); loadVoteChart(); loadGapChart(); }
+function loadAllCharts() { loadReplayChart(); loadSlotChart(); loadVoteChart(); loadGapChart(); loadSystemChart(); }
 loadAllCharts();
 setInterval(loadAllCharts, 4000);
 window.addEventListener('resize', loadAllCharts);

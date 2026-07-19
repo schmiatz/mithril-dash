@@ -19,6 +19,7 @@ const (
 	maxSlotStatsHist = 3000
 	maxVotingHistory = 3600 // ~1h at 1 sample/s
 	maxSlotSummary   = 2000 // one point every 100 slots (~20s at 200ms/slot) — 2000 covers many hours
+	maxSystemHist    = 3600 // ~1h at 1 sample/s
 )
 
 type sourceHealth struct {
@@ -117,6 +118,49 @@ type State struct {
 	BlockProd   BlockProdState `json:"block_production"`
 	Voting      VotingState    `json:"voting"`
 	Summary     Summary        `json:"summary"`
+	System      SystemState    `json:"system"`
+}
+
+// SystemState mirrors the latest collect.ProcStats — OS-level metrics for
+// mithril's own process (CPU%, RSS, threads, disk I/O, open FDs), polled
+// directly from /proc rather than anything mithril logs itself.
+type SystemState struct {
+	TS    time.Time `json:"ts"`
+	Found bool      `json:"found"`
+	PID   int       `json:"pid"`
+
+	RssBytes   uint64 `json:"rss_bytes"`
+	NumThreads int    `json:"num_threads"`
+
+	HasCPU bool    `json:"has_cpu"`
+	CPUPct float64 `json:"cpu_pct"`
+	NumCPU int     `json:"num_cpu"`
+
+	HasIO        bool    `json:"has_io"`
+	DiskReadBps  float64 `json:"disk_read_bps"`
+	DiskWriteBps float64 `json:"disk_write_bps"`
+
+	HasFD   bool `json:"has_fd"`
+	OpenFDs int  `json:"open_fds"`
+
+	HasUptime  bool    `json:"has_uptime"`
+	UptimeSecs float64 `json:"uptime_secs"`
+
+	// HasAccountsFs/AccountsFsType/AccountsIsTmpfs describe the filesystem
+	// backing mithril's accounts DB — flags when it's tmpfs (RAM-backed),
+	// since /proc/<pid>/io's byte counters read ~zero for tmpfs regardless
+	// of load (there's no storage layer for those bytes to cross), which
+	// would otherwise look indistinguishable from "disk is idle".
+	HasAccountsFs   bool   `json:"has_accounts_fs"`
+	AccountsFsType  string `json:"accounts_fs_type"`
+	AccountsIsTmpfs bool   `json:"accounts_is_tmpfs"`
+}
+
+// SystemHistPoint is one process-stats poll, kept for the CPU%/RSS chart.
+type SystemHistPoint struct {
+	TS       time.Time `json:"ts"`
+	CPUPct   float64   `json:"cpu_pct"`
+	RssBytes uint64    `json:"rss_bytes"`
 }
 
 // Summary mirrors the latest parsed collect.SlotSummaryEvent — mithril's
@@ -242,8 +286,10 @@ type Store struct {
 	slotStatsHist   []SlotStatsHistPoint
 	votingHist      []VotingHistPoint
 	slotSummaryHist []SlotSummaryHistPoint
+	systemHist      []SystemHistPoint
 
 	summary Summary
+	system  SystemState
 
 	epoch epochAnchor
 
@@ -342,6 +388,7 @@ func (s *Store) Snapshot() State {
 		BlockProd:   s.blockProd,
 		Voting:      s.voting,
 		Summary:     s.summary,
+		System:      s.system,
 	}
 }
 
@@ -358,6 +405,7 @@ const (
 	HistorySlotStats   HistoryKind = "slot_stats"
 	HistoryVoting      HistoryKind = "voting"
 	HistorySlotSummary HistoryKind = "slot_summary"
+	HistorySystem      HistoryKind = "system"
 )
 
 // History returns up to `limit` most recent points of the given kind.
@@ -369,6 +417,8 @@ func (s *Store) History(kind HistoryKind, limit int) interface{} {
 		return lastN(s.replayHist, limit)
 	case HistorySlotStats:
 		return lastN(s.slotStatsHist, limit)
+	case HistorySystem:
+		return lastN(s.systemHist, limit)
 	case HistoryVoting:
 		return lastN(s.votingHist, limit)
 	case HistorySlotSummary:
@@ -552,6 +602,32 @@ func (s *Store) ApplySlotSummary(e collect.SlotSummaryEvent) {
 
 	if e.HasFinalized {
 		s.overview.CurrentSlot = maxU64(s.overview.CurrentSlot, e.FinalizedSlot)
+	}
+
+	s.touch()
+}
+
+// ApplyProcStats ingests one /proc poll of mithril's own OS process (see
+// collect.RunProcStatsPoller). Found=false samples are still applied — the
+// dashboard shows "process not found" rather than silently going stale.
+func (s *Store) ApplyProcStats(ps collect.ProcStats) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.system = SystemState{
+		TS: ps.TS, Found: ps.Found, PID: ps.PID,
+		RssBytes: ps.RssBytes, NumThreads: ps.NumThreads,
+		HasCPU: ps.HasCPU, CPUPct: ps.CPUPct, NumCPU: ps.NumCPU,
+		HasIO: ps.HasIO, DiskReadBps: ps.DiskReadBps, DiskWriteBps: ps.DiskWriteBps,
+		HasFD: ps.HasFD, OpenFDs: ps.OpenFDs,
+		HasUptime: ps.HasUptime, UptimeSecs: ps.UptimeSecs,
+		HasAccountsFs: ps.HasAccountsFs, AccountsFsType: ps.AccountsFsType, AccountsIsTmpfs: ps.AccountsIsTmpfs,
+	}
+
+	if ps.Found {
+		s.systemHist = appendCapped(s.systemHist, SystemHistPoint{
+			TS: ps.TS, CPUPct: ps.CPUPct, RssBytes: ps.RssBytes,
+		}, maxSystemHist)
 	}
 
 	s.touch()

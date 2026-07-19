@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -62,6 +63,7 @@ func main() {
 	go collect.RunReplayTimingsTailer(ctx, cfg.LogDir, logPollInterval, st.ApplyReplaySample)
 	go collect.RunPromScraper(ctx, cfg.PrometheusURL, cfg.ScrapeInterval, st.ApplyPromSnapshot)
 	go collect.RunStatePoller(ctx, cfg.AccountsPath, cfg.StatePollInterval, st.ApplyNodeState)
+	go collect.RunProcStatsPoller(ctx, cfg.MithrilProcessMatch, runtime.NumCPU(), cfg.AccountsPath, cfg.ProcStatsInterval, st.ApplyProcStats)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: web.NewServer(st).Handler()}
 	go func() {

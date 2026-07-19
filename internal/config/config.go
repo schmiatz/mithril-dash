@@ -7,6 +7,7 @@ import (
 	"flag"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -44,8 +45,17 @@ type Config struct {
 	// epochAnchor — for clusters whose epoch length isn't known upfront.
 	SlotsPerEpoch uint64
 
+	// MithrilProcessMatch selects mithril's OS process among everything in
+	// /proc, by requiring every string here to appear in its cmdline. The
+	// default targets the long-running validator specifically ("mithril
+	// run"), not a one-off `mithril status`/`mithril dashboard` invocation.
+	// Linux-only (see internal/collect/procstats.go) — harmless to leave on
+	// elsewhere, it just never finds a match.
+	MithrilProcessMatch []string
+
 	ScrapeInterval    time.Duration
 	StatePollInterval time.Duration
+	ProcStatsInterval time.Duration
 }
 
 func envOr(key, fallback string) string {
@@ -125,6 +135,9 @@ func Load() Config {
 	flag.DurationVar(&c.StatePollInterval, "state-poll-interval", 2*time.Second, "mithril_state.json poll interval")
 	slotsPerEpoch := flag.Uint64("slots-per-epoch", 0,
 		"exact slots-per-epoch for this cluster, if known (e.g. 54000) — makes the epoch progress bar exact immediately; 0 = auto-estimate")
+	processMatch := flag.String("mithril-process-match", "mithril, run",
+		"comma-separated substrings that must ALL appear in a process's cmdline to identify it as mithril (Linux /proc only); default targets `mithril run` specifically")
+	flag.DurationVar(&c.ProcStatsInterval, "proc-stats-interval", 2*time.Second, "mithril OS-process (/proc) poll interval")
 	flag.Parse()
 
 	c.ConsensusMode = mc.Consensus.Mode
@@ -137,5 +150,12 @@ func Load() Config {
 		}
 	}
 	c.SlotsPerEpoch = *slotsPerEpoch
+
+	for _, part := range strings.Split(*processMatch, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			c.MithrilProcessMatch = append(c.MithrilProcessMatch, part)
+		}
+	}
+
 	return c
 }

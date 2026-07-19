@@ -16,6 +16,15 @@ It shows:
   broadcast queue/drop and peer-send stats
 - **Block production** — leader slots broadcast vs. missed (and why),
   per-slot txns/CU/exec time, shred assembly/repair timing
+- **100-slot summary** — mithril's own periodic health report: slots/sec,
+  how far replay is behind the turbine shred tip, execution/efficiency/CU
+  percentiles, repair peer quality, resource usage
+- **System** — mithril's own OS process (CPU%, RAM/RSS, disk I/O, threads,
+  open FDs), polled straight from `/proc` — Linux only. Also flags when
+  `storage.accounts` is tmpfs-backed, since `/proc/<pid>/io`'s byte counters
+  only count bytes that crossed a real storage layer — tmpfs has none, so it
+  reads as ~0 disk I/O no matter the load, which would otherwise look
+  indistinguishable from an idle disk
 
 ## Build
 
@@ -44,6 +53,8 @@ Then open `http://<host>:8090/`.
 | `-scrape-interval` | – | `3s` | Prometheus scrape interval |
 | `-state-poll-interval` | – | `2s` | `mithril_state.json` poll interval |
 | `-slots-per-epoch` | `MITHRIL_DASH_SLOTS_PER_EPOCH` | `0` (unset) | this cluster's exact slots-per-epoch, if known (e.g. `54000`) — makes the epoch progress bar exact from the moment mithril-dash starts; left unset, the bar just doesn't render (no guessing) |
+| `-mithril-process-match` | – | `mithril, run` | comma-separated substrings that must ALL appear in a process's cmdline to identify it as mithril for the System card (Linux `/proc` only) — default targets the long-running `mithril run` validator specifically, not a one-off `mithril status`/`mithril dashboard` |
+| `-proc-stats-interval` | – | `2s` | how often the System card polls mithril's `/proc` entry |
 | `-mithril-config` | – | – | path to mithril's own `config.toml`; seeds `log-dir`/`accounts-path`/cluster/consensus-mode defaults (explicit flags/env still win) |
 
 Instead of setting the paths/ports by hand, you can just point at mithril's

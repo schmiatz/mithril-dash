@@ -29,6 +29,8 @@
   .title-row { display: flex; align-items: center; gap: 14px; }
   .logo { width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   h1 { font-size: 24px; font-weight: 800; letter-spacing: -.4px; }
+  .identity { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #94a3b8; text-align: right; }
+  .identity .label { display: block; font-family: Inter, system-ui, -apple-system, sans-serif; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #3d5070; margin-bottom: 4px; }
 
   .sec-title {
     font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
@@ -85,9 +87,10 @@
     <div class="title-row">
       <img class="logo" alt="Mithril" src="data:image/jpeg;base64,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">
       <div>
-        <h1>Mithril Alpenglow</h1>
+        <h1 id="ov-name">Mithril</h1>
       </div>
     </div>
+    <div class="identity" id="ov-identity"></div>
   </div>
 
   <div class="card">
@@ -118,6 +121,7 @@
       <div class="stat">
         <div class="label">CPU</div>
         <div class="value" id="sys-cpu">–</div>
+        <div class="foot" id="sys-cpu-sub">–</div>
       </div>
       <div class="stat">
         <div class="label">Memory (RSS)</div>
@@ -138,7 +142,7 @@
     </div>
     <div style="margin-top:16px">
       <canvas class="chart" id="system-cpu-chart"></canvas>
-      <div class="foot">CPU % over time (100% = one core saturated)</div>
+      <div class="foot">CPU % over time</div>
     </div>
   </div>
 
@@ -322,6 +326,11 @@ const STAGE_ORDER = Object.keys(STAGE_LABELS);
 function update(d) {
   const ov = d.overview || {}, pl = d.pipeline || {}, bp = d.block_production || {}, vt = d.voting || {};
 
+  $('ov-name').textContent = ov.name || 'Mithril';
+  $('ov-identity').innerHTML = ov.identity_pubkey
+    ? `<span class="label">Identity</span>${ov.identity_pubkey}`
+    : '';
+
   $('ov-slot').textContent = fmtNum(ov.current_slot);
   $('ov-stage').textContent = 'stage: ' + (ov.stage || '–');
   $('ov-epoch').textContent = fmtNum(ov.current_epoch);
@@ -459,6 +468,7 @@ async function loadGapChart() {
 function renderSystem(sys) {
   if (!sys || !sys.found) {
     $('sys-cpu').textContent = '–';
+    $('sys-cpu-sub').textContent = '–';
     $('sys-rss').textContent = '–';
     $('sys-threads').textContent = '– threads';
     $('sys-io').textContent = '–';
@@ -478,6 +488,7 @@ function renderSystem(sys) {
   } else {
     $('sys-cpu').textContent = '–';
   }
+  $('sys-cpu-sub').textContent = fmtNum(sys.num_cpu) + ' cores';
   $('sys-rss').textContent = fmtBytes(sys.rss_bytes);
   $('sys-threads').textContent = fmtNum(sys.num_threads) + ' threads';
   $('sys-io').textContent = sys.has_io ? `${fmtBps(sys.disk_read_bps)} / ${fmtBps(sys.disk_write_bps)}` : '–';

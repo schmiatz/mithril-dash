@@ -55,7 +55,9 @@ Then open `http://<host>:8090/`.
 | `-slots-per-epoch` | `MITHRIL_DASH_SLOTS_PER_EPOCH` | `0` (unset) | this cluster's exact slots-per-epoch, if known (e.g. `54000`) — makes the epoch progress bar exact from the moment mithril-dash starts; left unset, the bar just doesn't render (no guessing) |
 | `-mithril-process-match` | – | `mithril, run` | comma-separated substrings that must ALL appear in a process's cmdline to identify it as mithril for the System card (Linux `/proc` only) — default targets the long-running `mithril run` validator specifically, not a one-off `mithril status`/`mithril dashboard` |
 | `-proc-stats-interval` | – | `2s` | how often the System card polls mithril's `/proc` entry |
-| `-mithril-config` | – | – | path to mithril's own `config.toml`; seeds `log-dir`/`accounts-path`/cluster/consensus-mode defaults (explicit flags/env still win) |
+| `-name` | – | `Mithril` | name shown in the dashboard header (e.g. `"SF Community Validator"`) — cosmetic only |
+| `-identity-keypair` | `MITHRIL_DASH_IDENTITY_KEYPAIR` | – | path to mithril's `validator.identity_keypair` file, to display the validator's identity pubkey in the header (only the derived public key is ever read out — the private key material never leaves this file) |
+| `-mithril-config` | – | – | path to mithril's own `config.toml`; seeds `log-dir`/`accounts-path`/`identity-keypair`/cluster/consensus-mode defaults (explicit flags/env still win) |
 
 Instead of setting the paths/ports by hand, you can just point at mithril's
 own config:

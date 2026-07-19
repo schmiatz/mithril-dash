@@ -53,6 +53,17 @@ type Config struct {
 	// elsewhere, it just never finds a match.
 	MithrilProcessMatch []string
 
+	// Name is shown in the dashboard header in place of "Mithril" (e.g. "SF
+	// Community Validator"). Purely cosmetic — has no effect on what's
+	// monitored.
+	Name string
+
+	// IdentityKeypairPath is mithril's `validator.identity_keypair` file —
+	// read once at startup to derive and display the validator's public
+	// key (see internal/collect/identity.go). Never touches the private
+	// key material beyond that one read.
+	IdentityKeypairPath string
+
 	ScrapeInterval    time.Duration
 	StatePollInterval time.Duration
 	ProcStatsInterval time.Duration
@@ -77,6 +88,9 @@ type mithrilTOML struct {
 	Network struct {
 		Cluster string `toml:"cluster"`
 	} `toml:"network"`
+	Validator struct {
+		IdentityKeypair string `toml:"identity_keypair"`
+	} `toml:"validator"`
 }
 
 // peekMithrilConfigFlag scans os.Args by hand for -mithril-config/
@@ -122,7 +136,10 @@ func Load() Config {
 	}
 
 	var c Config
-	flag.String("mithril-config", "", "path to mithril's own config.toml; seeds --log-dir/--accounts-path/cluster/consensus-mode defaults")
+	flag.String("mithril-config", "", "path to mithril's own config.toml; seeds --log-dir/--accounts-path/--identity-keypair/cluster/consensus-mode defaults")
+	flag.StringVar(&c.Name, "name", "", `name shown in the dashboard header instead of "Mithril" (e.g. "SF Community Validator")`)
+	flag.StringVar(&c.IdentityKeypairPath, "identity-keypair", envOr("MITHRIL_DASH_IDENTITY_KEYPAIR", mc.Validator.IdentityKeypair),
+		"path to mithril's validator.identity_keypair file, to display the validator's public key (never reads/exposes the private key material)")
 	flag.StringVar(&c.LogDir, "log-dir", envOr("MITHRIL_DASH_LOG_DIR", logDefault),
 		"mithril storage.logs directory (contains the `latest` run symlink)")
 	flag.StringVar(&c.AccountsPath, "accounts-path", envOr("MITHRIL_DASH_ACCOUNTS_PATH", accountsDefault),

@@ -37,6 +37,12 @@ func (s sourceHealth) Status() string {
 }
 
 type Overview struct {
+	// Name and IdentityPubkey are static, set once at startup (-name flag;
+	// validator.identity_keypair read once via collect.LoadIdentityPubkey)
+	// — neither changes while mithril-dash runs.
+	Name           string `json:"name"`
+	IdentityPubkey string `json:"identity_pubkey"`
+
 	Cluster            string `json:"cluster"`
 	ConsensusMode      string `json:"consensus_mode"`
 	RunID              string `json:"run_id"`
@@ -296,7 +302,7 @@ type Store struct {
 	generation uint64
 }
 
-func New(cluster, consensusMode string, slotsPerEpoch uint64) *Store {
+func New(cluster, consensusMode string, slotsPerEpoch uint64, name, identityPubkey string) *Store {
 	s := &Store{
 		pipeline: PipelineState{
 			Avg5mMs:           map[string]float64{},
@@ -308,6 +314,8 @@ func New(cluster, consensusMode string, slotsPerEpoch uint64) *Store {
 		blockProd: BlockProdState{Outcomes: map[string]map[string]float64{}},
 		epoch:     epochAnchor{known: slotsPerEpoch},
 	}
+	s.overview.Name = name
+	s.overview.IdentityPubkey = identityPubkey
 	s.overview.Cluster = cluster
 	s.overview.ConsensusMode = consensusMode
 	s.cond = sync.NewCond(&s.mu)

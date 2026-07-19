@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/mr-tron/base58 v1.3.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )

@@ -30,7 +30,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	st := store.New(cfg.Cluster, cfg.ConsensusMode, cfg.SlotsPerEpoch)
+	name := cfg.Name
+	if name == "" {
+		name = "Mithril"
+	}
+	identityPubkey, err := collect.LoadIdentityPubkey(cfg.IdentityKeypairPath)
+	if err != nil {
+		log.Printf("identity pubkey unavailable: %v", err)
+	}
+
+	st := store.New(cfg.Cluster, cfg.ConsensusMode, cfg.SlotsPerEpoch, name, identityPubkey)
 
 	// 100ms keeps pace with mithril's ~200ms Alpenglow slot cadence: since we
 	// stamp each line with our own ingestion time (mithril's log timestamps

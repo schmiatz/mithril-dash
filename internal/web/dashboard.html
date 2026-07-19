@@ -470,8 +470,22 @@ function renderSystem(sys) {
     $('sys-uptime').textContent = 'uptime: –';
     return;
   }
-  $('sys-cpu').textContent = sys.has_cpu ? sys.cpu_pct.toFixed(0) + '%' : '–';
-  $('sys-cpu-sub').textContent = 'of ' + fmtNum(sys.num_cpu) + ' cores';
+  if (sys.num_cpu) lastNumCPU = sys.num_cpu;
+  // Headline number is normalized to TOTAL machine capacity (100% = every
+  // core maxed) — the figure most people mean by "CPU usage", and matches
+  // what tools like btop show by default. cpu_pct itself is the classic
+  // top/htop convention (100% = one core saturated, so multi-threaded work
+  // can exceed 100%) — shown as a footnote so neither reading is lost, since
+  // "118% (of 48 cores)" alone reads ambiguously as if 118% were already a
+  // whole-machine figure.
+  if (sys.has_cpu) {
+    const normalized = sys.num_cpu ? sys.cpu_pct / sys.num_cpu : sys.cpu_pct;
+    $('sys-cpu').textContent = normalized.toFixed(1) + '%';
+    $('sys-cpu-sub').textContent = `${sys.cpu_pct.toFixed(0)}% of one core · ${fmtNum(sys.num_cpu)} cores total`;
+  } else {
+    $('sys-cpu').textContent = '–';
+    $('sys-cpu-sub').textContent = 'of ' + fmtNum(sys.num_cpu) + ' cores';
+  }
   $('sys-rss').textContent = fmtBytes(sys.rss_bytes);
   $('sys-threads').textContent = fmtNum(sys.num_threads) + ' threads';
   $('sys-io').textContent = sys.has_io ? `${fmtBps(sys.disk_read_bps)} / ${fmtBps(sys.disk_write_bps)}` : '–';
@@ -491,11 +505,15 @@ function renderSystem(sys) {
   $('sys-uptime').textContent = 'uptime: ' + (sys.has_uptime ? fmtDuration(sys.uptime_secs) : '–');
 }
 
+let lastNumCPU = null; // set by renderSystem; num_cpu is a fixed host constant, safe to reuse across history
+
 async function loadSystemChart() {
   try {
     const res = await fetch('/history?kind=system&limit=1500');
     const rows = await res.json();
-    const series = (rows || []).map(r => ({y: r.cpu_pct}));
+    // Normalized to total machine capacity, matching the headline number.
+    const divisor = lastNumCPU || 1;
+    const series = (rows || []).map(r => ({y: r.cpu_pct / divisor}));
     drawLineChart($('system-cpu-chart'), series, {color: '#34d399', unit: '%'});
   } catch (e) {}
 }

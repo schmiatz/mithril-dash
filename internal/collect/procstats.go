@@ -11,6 +11,7 @@ package collect
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -162,79 +163,51 @@ func countOpenFDs(pid int) (int, bool) {
 	return len(entries), true
 }
 
-// mountEntry is one parsed line of /proc/mounts.
-type mountEntry struct {
-	MountPoint string
-	FsType     string
+// fsTypeMagic maps the handful of statfs(2) f_type magic numbers we care
+// about to a human-readable name (Linux kernel include/uapi/linux/magic.h —
+// stable, effectively never-changing values, not exposed as named
+// constants by Go's standard syscall package). ext2/ext3/ext4 share one
+// magic number (the on-disk format is the same superblock), so "ext2/3/4"
+// is as specific as statfs alone can get; unrecognized types still report
+// correctly for the one thing that matters (IsTmpfs), just with a numeric
+// fallback name.
+var fsTypeMagic = map[int64]string{
+	0x01021994: "tmpfs",
+	0x858458F6: "ramfs",
+	0xEF53:     "ext2/3/4",
+	0x58465342: "xfs",
+	0x9123683E: "btrfs",
+	0x6969:     "nfs",
+	0x794C7630: "overlayfs",
+	0x2FC12FC1: "zfs",
 }
 
-// parseMounts parses /proc/mounts (device, mountpoint, fstype, options, …).
-func parseMounts(data []byte) []mountEntry {
-	var entries []mountEntry
-	for _, line := range strings.Split(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		entries = append(entries, mountEntry{MountPoint: fields[1], FsType: fields[2]})
-	}
-	return entries
-}
+const (
+	tmpfsMagic = 0x01021994
+	ramfsMagic = 0x858458F6
+)
 
-// pickFilesystemType finds which mount entry actually backs targetDev,
-// preferring the longest mount point on ties (nested mounts share a path
-// prefix, so the innermost/most-specific one is the real answer). This
-// mirrors mithril's own pkg/progress/progress.go:getMountPoint — matching
-// by device ID rather than naive path-prefix string comparison, so a bind
-// mount or a mount nested under another mount can't be misattributed.
-// statDev is injected so the matching logic is unit-testable without real
-// syscalls; FilesystemType below supplies the real one.
-func pickFilesystemType(entries []mountEntry, targetDev uint64, statDev func(path string) (uint64, bool)) (string, bool) {
-	var best string
-	bestLen := -1
-	for _, e := range entries {
-		dev, ok := statDev(e.MountPoint)
-		if !ok || dev != targetDev {
-			continue
-		}
-		if len(e.MountPoint) > bestLen {
-			best = e.FsType
-			bestLen = len(e.MountPoint)
-		}
+// filesystemInfo reports the filesystem backing path via statfs(2)'s
+// f_type — the same mechanism `df -T`/`stat -f` use — rather than
+// cross-referencing /proc/mounts by device ID across potentially many
+// overlapping/bind-mounted entries, which is more moving parts than this
+// needs. Used to flag when mithril's accounts DB (storage.accounts) sits on
+// tmpfs: /proc/<pid>/io's byte counters only count bytes that actually
+// crossed the storage layer, so tmpfs — being RAM, with no storage layer at
+// all — reads as ~zero disk I/O no matter how much the accounts DB is
+// hammered. Without this, that would look indistinguishable from "the disk
+// isn't doing anything."
+func filesystemInfo(path string) (fsType string, isTmpfs bool, ok bool) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return "", false, false
 	}
-	return best, bestLen >= 0
-}
-
-// FilesystemType reports the filesystem type backing path (e.g. "ext4",
-// "xfs", "tmpfs") by resolving its device ID via stat(2) and matching it
-// against /proc/mounts. Used to flag when mithril's accounts DB
-// (storage.accounts) sits on tmpfs: /proc/<pid>/io's byte counters only
-// count bytes that actually crossed the storage layer, so tmpfs — being
-// RAM, with no storage layer at all — reads as ~zero disk I/O no matter how
-// much the accounts DB is hammered. Without this, that would look
-// indistinguishable from "the disk isn't doing anything."
-func FilesystemType(path string) (string, bool) {
-	var pathStat syscall.Stat_t
-	if err := syscall.Stat(path, &pathStat); err != nil {
-		return "", false
+	magic := int64(st.Type)
+	isTmpfs = magic == tmpfsMagic || magic == ramfsMagic
+	if name, known := fsTypeMagic[magic]; known {
+		return name, isTmpfs, true
 	}
-	data, err := os.ReadFile("/proc/mounts")
-	if err != nil {
-		return "", false
-	}
-	return pickFilesystemType(parseMounts(data), uint64(pathStat.Dev), func(p string) (uint64, bool) {
-		var st syscall.Stat_t
-		if err := syscall.Stat(p, &st); err != nil {
-			return 0, false
-		}
-		return uint64(st.Dev), true
-	})
-}
-
-// IsTmpfsLike reports whether fsType is a RAM-backed filesystem (tmpfs or
-// the older ramfs) — no physical disk I/O will ever show up for either.
-func IsTmpfsLike(fsType string) bool {
-	return fsType == "tmpfs" || fsType == "ramfs"
+	return fmt.Sprintf("unknown (0x%x)", uint64(magic)), isTmpfs, true
 }
 
 // ProcStats is one poll's worth of OS-level process metrics for mithril.
@@ -291,13 +264,31 @@ type procStatsPoller struct {
 
 func (p *procStatsPoller) poll() ProcStats {
 	now := time.Now()
+
+	// Independent of PID discovery below: whether the accounts DB is on
+	// tmpfs depends only on the configured path, not on whether mithril's
+	// OS process was found this cycle. Computing it unconditionally (and
+	// attaching it to every return path via withFs) means a PID-discovery
+	// hiccup can never silently make this flag disappear too.
+	var accFsType string
+	var accIsTmpfs, hasAccFs bool
+	if p.accountsPath != "" {
+		if fsType, isTmpfs, ok := filesystemInfo(p.accountsPath); ok {
+			hasAccFs, accFsType, accIsTmpfs = true, fsType, isTmpfs
+		}
+	}
+	withFs := func(out ProcStats) ProcStats {
+		out.HasAccountsFs, out.AccountsFsType, out.AccountsIsTmpfs = hasAccFs, accFsType, accIsTmpfs
+		return out
+	}
+
 	if !p.pidFound {
 		if pid, ok := FindPID(p.matchAll); ok {
 			p.pid = pid
 			p.pidFound = true
 			p.haveSample = false // fresh PID: no valid delta yet
 		} else {
-			return ProcStats{TS: now, Found: false}
+			return withFs(ProcStats{TS: now, Found: false})
 		}
 	}
 
@@ -307,11 +298,11 @@ func (p *procStatsPoller) poll() ProcStats {
 		// Process likely exited (e.g. mithril restarted) — forget the PID
 		// and re-discover it on the next poll.
 		p.pidFound = false
-		return ProcStats{TS: now, Found: false}
+		return withFs(ProcStats{TS: now, Found: false})
 	}
 	stat, ok := parseProcStat(statData)
 	if !ok {
-		return ProcStats{TS: now, Found: false}
+		return withFs(ProcStats{TS: now, Found: false})
 	}
 
 	out := ProcStats{TS: now, Found: true, PID: p.pid, NumThreads: stat.NumThreads, NumCPU: p.numCPU}
@@ -361,16 +352,8 @@ func (p *procStatsPoller) poll() ProcStats {
 		}
 	}
 
-	if p.accountsPath != "" {
-		if fsType, ok := FilesystemType(p.accountsPath); ok {
-			out.HasAccountsFs = true
-			out.AccountsFsType = fsType
-			out.AccountsIsTmpfs = IsTmpfsLike(fsType)
-		}
-	}
-
 	p.prevUtime, p.prevStime, p.prevSampleAt, p.haveSample = stat.UtimeTicks, stat.StimeTicks, now, true
-	return out
+	return withFs(out)
 }
 
 // RunProcStatsPoller polls mithril's own OS process on interval and invokes

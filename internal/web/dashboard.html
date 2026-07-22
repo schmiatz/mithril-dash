@@ -441,8 +441,14 @@ function update(d) {
   $('leader-events').innerHTML = (bp.recent_leader_events && bp.recent_leader_events.length)
     ? bp.recent_leader_events.slice().reverse().map(e => {
         const cls = e.Broadcast ? 'ok' : 'err';
+        // Broadcast (successful) outcomes carry real production-window timing —
+        // deadline_margin_ms in particular is how close the slot ran to missing
+        // its window entirely, negative meaning it slipped past the deadline.
+        const detail = e.Broadcast
+          ? `${fmtNum(e.Txns)} txns · window ${fmtMs(e.WindowElapsedMs)} · margin ${fmtMs(e.DeadlineMarginMs)}`
+          : `${e.Reason}${e.Detail ? ' — ' + e.Detail : ''}`;
         return `<div class="feed-item"><span class="feed-badge ${cls}">${e.Broadcast ? 'broadcast' : 'missed'}</span>
-          <span class="feed-slot">slot ${fmtNum(e.Slot)}</span><span class="feed-detail">${e.Reason}${e.Detail ? ' — ' + e.Detail : ''}</span></div>`;
+          <span class="feed-slot">slot ${fmtNum(e.Slot)}</span><span class="feed-detail">${detail}</span></div>`;
       }).join('')
     : '<div class="empty">waiting…</div>';
 

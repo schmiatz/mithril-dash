@@ -55,6 +55,15 @@ type VotingStatsEvent struct {
 	ActiveConnections uint64
 }
 
+// LeaderSlotEvent is one "broadcast"/"missed local leader" outcome, parsed
+// from pkg/blockprod/leader.go's recordLeaderSlotOutcomeLocked. This line's
+// field set has grown over time on mithril's actively-developed alpenglow
+// branch (terminal=/cause=/finalization_ms=/local_handoff_ms= were all added
+// after reason=/replay_frontier=/live_slot=), so — unlike this package's
+// other line formats — it's parsed as a generic bag of key=value tokens
+// rather than a fixed-position regex: a field mithril adds or reorders just
+// leaves the corresponding struct field zero, instead of silently breaking
+// the whole match the way a positional regex would.
 type LeaderSlotEvent struct {
 	TS             time.Time
 	Slot           uint64
@@ -62,7 +71,20 @@ type LeaderSlotEvent struct {
 	Reason         string
 	ReplayFrontier uint64
 	LiveSlot       uint64
-	Detail         string
+	Detail         string // free-text failure detail (missed outcomes only)
+
+	// Populated on broadcast (successful) outcomes only — mithril has
+	// nothing to report here for a missed slot, since production never
+	// completed.
+	Block            string
+	ParentSlot       uint64
+	Txns             int
+	WindowElapsedMs  float64
+	FinalizationMs   float64
+	DeadlineMarginMs float64
+	LocalHandoffMs   float64
+	Terminal         string
+	Cause            string
 }
 
 type SlotStatsEvent struct {
@@ -96,15 +118,50 @@ var voteLandedRe = regexp.MustCompile(`ALPENGLOW voting: vote landed source=(\S+
 // votingStatsRe matches pkg/consensus/voter.go:872
 var votingStatsRe = regexp.MustCompile(`alpenglow voting stats: votes_cast_this_run=(\d+) network_landed=(\d+) last_landed_slot=(\d+) broadcast_queued=(\d+) broadcast_dropped=(\d+) peer_sends=(\d+) peer_send_errors=(\d+) active_connections=(\d+)`)
 
-// leaderBroadcastRe matches pkg/blockprod/leader.go:587
-//
-//	"ALPENGLOW block production: broadcast local leader slot=%d reason=%s replay_frontier=%d live_slot=%d %s"
-var leaderBroadcastRe = regexp.MustCompile(`ALPENGLOW block production: broadcast local leader slot=(\d+) reason=(\S+) replay_frontier=(\d+) live_slot=(\d+)\s*(.*)`)
+// leaderBroadcastPrefix/leaderMissedPrefix match pkg/blockprod/leader.go's
+// recordLeaderSlotOutcomeLocked (Infof/Warnf calls a few lines apart in the
+// same function). Everything after the prefix is "key=value key=value ..."
+// tokens — parsed generically by parseLeaderKV below rather than a
+// fixed-position regex, since this line's field set (terminal=/cause=/
+// finalization_ms=/local_handoff_ms= were all added after the original
+// reason=/replay_frontier=/live_slot=) keeps growing on this actively
+// developed branch, sometimes ahead of whatever commit this comment cites.
+const (
+	leaderBroadcastPrefix = "ALPENGLOW block production: broadcast local leader "
+	leaderMissedPrefix    = "ALPENGLOW block production: missed local leader "
+)
 
-// leaderMissedRe matches the sibling Warnf line in the same function
-//
-//	"ALPENGLOW block production: missed local leader slot=%d reason=%s replay_frontier=%d live_slot=%d detail=%s"
-var leaderMissedRe = regexp.MustCompile(`ALPENGLOW block production: missed local leader slot=(\d+) reason=(\S+) replay_frontier=(\d+) live_slot=(\d+) detail=(.*)`)
+var kvTokenRe = regexp.MustCompile(`(\w+)=(\S+)`)
+
+// parseLeaderKV extracts every "key=value" token from a leader-slot outcome
+// line. detail= is handled specially: mithril always writes it last with a
+// free-text value that can itself contain spaces (e.g. a wrapped error
+// message), unlike every other field here which is a single token — so it's
+// split out first and everything before it is token-scanned.
+func parseLeaderKV(rest string) map[string]string {
+	kv := map[string]string{}
+	if idx := strings.Index(rest, "detail="); idx >= 0 {
+		kv["detail"] = strings.TrimSpace(rest[idx+len("detail="):])
+		rest = rest[:idx]
+	}
+	for _, m := range kvTokenRe.FindAllStringSubmatch(rest, -1) {
+		kv[m[1]] = m[2]
+	}
+	return kv
+}
+
+func newLeaderSlotEvent(now time.Time, broadcast bool, kv map[string]string) LeaderSlotEvent {
+	return LeaderSlotEvent{
+		TS: now, Slot: parseU64(kv["slot"]), Broadcast: broadcast,
+		Reason: kv["reason"], ReplayFrontier: parseU64(kv["replay_frontier"]), LiveSlot: parseU64(kv["live_slot"]),
+		Detail: kv["detail"],
+
+		Block: kv["block"], ParentSlot: parseU64(kv["parent_slot"]), Txns: parseInt(kv["txns"]),
+		WindowElapsedMs: parseF64(kv["window_elapsed_ms"]), FinalizationMs: parseF64(kv["finalization_ms"]),
+		DeadlineMarginMs: parseF64(kv["deadline_margin_ms"]), LocalHandoffMs: parseF64(kv["local_handoff_ms"]),
+		Terminal: kv["terminal"], Cause: kv["cause"],
+	}
+}
 
 // slotStatsRe matches pkg/replay/summary_stats.go buildSlotStatsLine.
 var slotStatsRe = regexp.MustCompile(`^slot (\d+)\s*\|\s*leader (\S+)\s*\|\s*txns\s+(\d+)\s*\|\s*cu\s+(\S+)\s*\|\s*exec\s+([\d.]+)ms\s*\|\s*eff\s+(?:(--)|([\d.]+)ms/Mcu)(?:\s*\|\s*shreds\(ready\s*([+-]?[\d.]+)s,\s*asm\s*([\d.]+)s,\s*repair (\d+)\))?$`)
@@ -152,17 +209,11 @@ func ParseMithrilLogLine(raw string) interface{} {
 			PeerSends: parseU64(m[6]), PeerSendErrors: parseU64(m[7]), ActiveConnections: parseU64(m[8]),
 		}
 	}
-	if m := leaderBroadcastRe.FindStringSubmatch(line); m != nil {
-		return LeaderSlotEvent{
-			TS: now, Slot: parseU64(m[1]), Broadcast: true, Reason: m[2],
-			ReplayFrontier: parseU64(m[3]), LiveSlot: parseU64(m[4]), Detail: strings.TrimSpace(m[5]),
-		}
+	if rest, ok := strings.CutPrefix(line, leaderBroadcastPrefix); ok {
+		return newLeaderSlotEvent(now, true, parseLeaderKV(rest))
 	}
-	if m := leaderMissedRe.FindStringSubmatch(line); m != nil {
-		return LeaderSlotEvent{
-			TS: now, Slot: parseU64(m[1]), Broadcast: false, Reason: m[2],
-			ReplayFrontier: parseU64(m[3]), LiveSlot: parseU64(m[4]), Detail: strings.TrimSpace(m[5]),
-		}
+	if rest, ok := strings.CutPrefix(line, leaderMissedPrefix); ok {
+		return newLeaderSlotEvent(now, false, parseLeaderKV(rest))
 	}
 	if m := slotSkippedRe.FindStringSubmatch(line); m != nil {
 		ev := SlotStatsEvent{TS: now, Slot: parseU64(m[1]), Leader: m[2], Skipped: true}

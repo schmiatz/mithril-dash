@@ -43,6 +43,13 @@ type VoteLandedEvent struct {
 	NetworkLanded uint64
 }
 
+// VotingStatsEvent mirrors mithril's periodic "alpenglow voting stats:" line
+// (pkg/consensus/voter.go maybeLogStats). Like LeaderSlotEvent, its field set
+// keeps growing on this branch (peer_sends_skipped=/desired_peers=/
+// pending_connections=/connection_attempts=/connection_errors=/
+// connection_jobs_dropped= were all added after the fields below), so it's
+// parsed via the same generic key=value token scan rather than a
+// fixed-position regex.
 type VotingStatsEvent struct {
 	TS                time.Time
 	VotesCastThisRun  uint64
@@ -115,30 +122,32 @@ var voteCastRe = regexp.MustCompile(`ALPENGLOW voting: cast (\S+) vote slot=(\d+
 //	"ALPENGLOW voting: vote landed source=votor-quic proof=verified-aggregate vote=%s slot=%d rank=%d certificate=%s block=%s network_landed=%d"
 var voteLandedRe = regexp.MustCompile(`ALPENGLOW voting: vote landed source=(\S+) proof=(\S+) vote=(\S+) slot=(\d+) rank=(\d+) certificate=(\S+) block=(\S+) network_landed=(\d+)`)
 
-// votingStatsRe matches pkg/consensus/voter.go:872
-var votingStatsRe = regexp.MustCompile(`alpenglow voting stats: votes_cast_this_run=(\d+) network_landed=(\d+) last_landed_slot=(\d+) broadcast_queued=(\d+) broadcast_dropped=(\d+) peer_sends=(\d+) peer_send_errors=(\d+) active_connections=(\d+)`)
-
 // leaderBroadcastPrefix/leaderMissedPrefix match pkg/blockprod/leader.go's
 // recordLeaderSlotOutcomeLocked (Infof/Warnf calls a few lines apart in the
-// same function). Everything after the prefix is "key=value key=value ..."
-// tokens — parsed generically by parseLeaderKV below rather than a
-// fixed-position regex, since this line's field set (terminal=/cause=/
-// finalization_ms=/local_handoff_ms= were all added after the original
-// reason=/replay_frontier=/live_slot=) keeps growing on this actively
-// developed branch, sometimes ahead of whatever commit this comment cites.
+// same function). votingStatsPrefix matches pkg/consensus/voter.go's
+// maybeLogStats. Everything after each prefix is "key=value key=value ..."
+// tokens — parsed generically by parseKVTokens below rather than a
+// fixed-position regex, since both lines' field sets keep growing on this
+// actively developed branch (terminal=/cause=/finalization_ms=/
+// local_handoff_ms= and peer_sends_skipped=/desired_peers=/
+// pending_connections=/connection_attempts=/connection_errors=/
+// connection_jobs_dropped=, respectively, were all added after the fields
+// this package originally tracked) — sometimes ahead of whatever commit a
+// comment here cites.
 const (
 	leaderBroadcastPrefix = "ALPENGLOW block production: broadcast local leader "
 	leaderMissedPrefix    = "ALPENGLOW block production: missed local leader "
+	votingStatsPrefix     = "alpenglow voting stats: "
 )
 
 var kvTokenRe = regexp.MustCompile(`(\w+)=(\S+)`)
 
-// parseLeaderKV extracts every "key=value" token from a leader-slot outcome
-// line. detail= is handled specially: mithril always writes it last with a
-// free-text value that can itself contain spaces (e.g. a wrapped error
-// message), unlike every other field here which is a single token — so it's
-// split out first and everything before it is token-scanned.
-func parseLeaderKV(rest string) map[string]string {
+// parseKVTokens extracts every "key=value" token from the given string.
+// detail= is handled specially where present: mithril always writes it last
+// with a free-text value that can itself contain spaces (e.g. a wrapped
+// error message), unlike every other field here which is a single token —
+// so it's split out first and everything before it is token-scanned.
+func parseKVTokens(rest string) map[string]string {
 	kv := map[string]string{}
 	if idx := strings.Index(rest, "detail="); idx >= 0 {
 		kv["detail"] = strings.TrimSpace(rest[idx+len("detail="):])
@@ -160,6 +169,15 @@ func newLeaderSlotEvent(now time.Time, broadcast bool, kv map[string]string) Lea
 		WindowElapsedMs: parseF64(kv["window_elapsed_ms"]), FinalizationMs: parseF64(kv["finalization_ms"]),
 		DeadlineMarginMs: parseF64(kv["deadline_margin_ms"]), LocalHandoffMs: parseF64(kv["local_handoff_ms"]),
 		Terminal: kv["terminal"], Cause: kv["cause"],
+	}
+}
+
+func newVotingStatsEvent(now time.Time, kv map[string]string) VotingStatsEvent {
+	return VotingStatsEvent{
+		TS: now, VotesCastThisRun: parseU64(kv["votes_cast_this_run"]), NetworkLanded: parseU64(kv["network_landed"]),
+		LastLandedSlot: parseU64(kv["last_landed_slot"]), BroadcastQueued: parseU64(kv["broadcast_queued"]),
+		BroadcastDropped: parseU64(kv["broadcast_dropped"]), PeerSends: parseU64(kv["peer_sends"]),
+		PeerSendErrors: parseU64(kv["peer_send_errors"]), ActiveConnections: parseU64(kv["active_connections"]),
 	}
 }
 
@@ -202,18 +220,14 @@ func ParseMithrilLogLine(raw string) interface{} {
 			Rank: parseInt(m[5]), Certificate: m[6], Block: m[7], NetworkLanded: parseU64(m[8]),
 		}
 	}
-	if m := votingStatsRe.FindStringSubmatch(line); m != nil {
-		return VotingStatsEvent{
-			TS: now, VotesCastThisRun: parseU64(m[1]), NetworkLanded: parseU64(m[2]),
-			LastLandedSlot: parseU64(m[3]), BroadcastQueued: parseU64(m[4]), BroadcastDropped: parseU64(m[5]),
-			PeerSends: parseU64(m[6]), PeerSendErrors: parseU64(m[7]), ActiveConnections: parseU64(m[8]),
-		}
+	if rest, ok := strings.CutPrefix(line, votingStatsPrefix); ok {
+		return newVotingStatsEvent(now, parseKVTokens(rest))
 	}
 	if rest, ok := strings.CutPrefix(line, leaderBroadcastPrefix); ok {
-		return newLeaderSlotEvent(now, true, parseLeaderKV(rest))
+		return newLeaderSlotEvent(now, true, parseKVTokens(rest))
 	}
 	if rest, ok := strings.CutPrefix(line, leaderMissedPrefix); ok {
-		return newLeaderSlotEvent(now, false, parseLeaderKV(rest))
+		return newLeaderSlotEvent(now, false, parseKVTokens(rest))
 	}
 	if m := slotSkippedRe.FindStringSubmatch(line); m != nil {
 		ev := SlotStatsEvent{TS: now, Slot: parseU64(m[1]), Leader: m[2], Skipped: true}
